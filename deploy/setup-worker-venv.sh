@@ -7,6 +7,8 @@ REL=${1:?usage: setup-worker-venv.sh <release dir> [--with-tonemap]}
 VENV=$HOME/venvs/worker
 PY=/opt/alt/python313/bin/python3.13
 export TMPDIR=$HOME/tmp PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+# Same caps as the worker (THREAD_ENV): uncapped, OpenBLAS starts a thread per core (64) and dies on the LVE limit.
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 mkdir -p "$TMPDIR"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 # torch from the CPU-only index: the CUDA build is ~2.5 GB of libraries this host can't use.
