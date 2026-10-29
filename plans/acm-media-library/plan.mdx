@@ -137,25 +137,18 @@ Everything except the users' browsers and their mail servers runs inside one Cag
 ```
 
 ```css
-.ctx { display: grid; grid-template-columns: minmax(150px, 1fr) auto minmax(0, 3.2fr); gap: 16px; align-items: stretch; }
-.clients { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.ctx { display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch; }
+.ctx > * { min-width: 0; }
+.clients { flex: 1 1 170px; display: flex; flex-direction: column; gap: 10px; padding: 14px; }
 .clients .mail { margin-top: auto; }
 .cap { margin: 0 0 8px; font-size: 12px; }
-.wire { display: flex; flex-direction: column; justify-content: center; gap: 8px; }
-.host { padding: 14px; }
-.grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
-.grid > .db, .grid > .fs, .grid > .smtp, .grid > .tool, .grid > .keys { grid-column: auto; }
-.grid { grid-template-areas: "edge a1 api" "db fs smtp" "cron a2 worker" "t1 t2 keys"; grid-template-columns: 1fr 1fr 1fr; }
-.edge { grid-area: edge; } .api { grid-area: api; border-color: var(--wf-accent); }
-.grid > .arrow:nth-of-type(1) { grid-area: a1; }
-.db { grid-area: db; } .fs { grid-area: fs; } .smtp { grid-area: smtp; }
-.cron { grid-area: cron; } .worker { grid-area: worker; border-color: var(--wf-accent); }
-.grid > .arrow:nth-of-type(2) { grid-area: a2; }
-.grid > .tool:nth-of-type(1) { grid-area: t1; }
+.wire { flex: 0 1 170px; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+.host { flex: 999 1 460px; padding: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(190px, 30%), 1fr)); gap: 12px; align-items: center; }
+.api, .worker { border-color: var(--wf-accent); }
 .arrow { text-align: center; color: var(--wf-muted); font-size: 13px; }
 .diagram-box small, .diagram-node small { color: var(--wf-muted); font-size: 12px; }
-.legend { margin: 12px 0 0; padding-left: 18px; font-size: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 16px; }
-@media (max-width: 760px) { .ctx { grid-template-columns: 1fr; } .grid { grid-template-areas: none; grid-template-columns: 1fr; } .grid > * { grid-area: auto !important; } .legend { grid-template-columns: 1fr; } }
+.legend { margin: 12px 0 0; padding-left: 18px; font-size: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(max(220px, 45%), 1fr)); gap: 2px 16px; }
 ```
 
 </Diagram>
@@ -203,12 +196,11 @@ Everything except the users' browsers and their mail servers runs inside one Cag
 ```
 
 ```css
-.topo { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.topo { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(240px, 30%), 1fr)); gap: 14px; }
 .topo section { padding: 14px; display: flex; flex-direction: column; gap: 8px; }
 .h { margin: 4px 0 2px; font-weight: 600; }
 .topo small { display: block; color: var(--wf-muted); font-size: 12px; margin-top: 2px; }
 .cron { margin: 0; padding-left: 16px; font-size: 13px; display: grid; gap: 4px; }
-@media (max-width: 900px) { .topo { grid-template-columns: 1fr; } }
 ```
 
 </Diagram>
@@ -290,7 +282,7 @@ Migrations are **additive only** (expand, then contract in a later release), bec
 ```
 
 ```css
-.mods { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.mods { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(250px, 30%), 1fr)); gap: 14px; align-items: start; }
 .mods section { padding: 14px; }
 .mid { display: grid; gap: 14px; }
 .stack { display: grid; gap: 6px; }
@@ -300,7 +292,6 @@ Migrations are **additive only** (expand, then contract in a later release), bec
 .note { font-size: 12px; margin: 8px 0 0; }
 .api, .worker { border-color: var(--wf-accent); }
 .arrows { font-size: 12px; text-align: center; margin: 10px 0 0; }
-@media (max-width: 900px) { .mods { grid-template-columns: 1fr; } }
 ```
 
 </Diagram>
@@ -461,15 +452,15 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
     ]}
   ]}
   relations={[
-    { from: "sessions", to: "users", kind: "n-1" },
-    { from: "events", to: "users", kind: "n-1" },
-    { from: "assets", to: "events", kind: "n-1" },
-    { from: "assets", to: "users", kind: "n-1" },
-    { from: "renditions", to: "assets", kind: "n-1" },
-    { from: "processing_runs", to: "assets", kind: "n-1" },
-    { from: "jobs", to: "assets", kind: "n-1" },
+    { from: "users", to: "sessions", kind: "1-n" },
+    { from: "users", to: "events", kind: "1-n" },
+    { from: "events", to: "assets", kind: "1-n" },
+    { from: "users", to: "assets", kind: "1-n" },
+    { from: "assets", to: "renditions", kind: "1-n" },
+    { from: "assets", to: "processing_runs", kind: "1-n" },
+    { from: "assets", to: "jobs", kind: "1-n" },
     { from: "asset_keys", to: "assets", kind: "1-1" },
-    { from: "audit_log", to: "users", kind: "n-1" }
+    { from: "users", to: "audit_log", kind: "1-n" }
   ]}
 />
 
@@ -630,33 +621,83 @@ SHA-256 is the worker's first step for every job. A match within the same event 
 
 ### Worker runner
 
-<Mermaid
-  id="worker-loop"
-  caption="One cron tick. flock makes the runner a singleton, so a 'running' job found at start is always stale."
-  source={`flowchart TD
-  C[cron, every minute] --> L{flock -n worker.lock}
-  L -- held --> X[exit 0]
-  L -- acquired --> S[reset running → queued · run_after = now + 5 min × attempts · no extra attempt]
-  S --> Q[claim: attempts < max_attempts · FOR UPDATE SKIP LOCKED · ORDER BY priority DESC, created_at]
-  Q -- none --> E[exit]
-  Q -- job --> H[sha256 original · set duplicate_of]
-  H --> K{kind}
-  K -- process/reprocess image --> I[images.py → view/thumb · encrypt if core]
-  K -- process/reprocess video --> V[video pipeline]
-  K -- retier --> R[re-seal or unseal files · swap keys]
-  K -- purge --> P[rm asset dir · delete rows]
-  I & V & R & P --> O{ok?}
-  O -- yes --> D[state done · asset ready · update ρ EMA]
-  O -- no --> F[attempts < max? queued with backoff : failed + asset failed]
-  D & F --> W{wall time > 50 min?}
-  W -- no --> Q
-  W -- yes --> E`}
-/>
+<Diagram id="worker-loop" frame="show" caption="One cron tick of the worker (apps/worker/src/runner.ts). flock makes the runner a singleton, so any job still marked running at the start belongs to a runner that died.">
+
+```html
+<div class="wl">
+  <section class="diagram-panel" data-rough>
+    <p class="h"><span class="n">1</span> Start the tick</p>
+    <div class="flow">
+      <div class="diagram-box">cron, every minute<small>/usr/bin/flock -n ~/tmp/acm-worker.lock node worker/run.mjs</small></div>
+      <div class="ar">↓</div>
+      <div class="split">
+        <div class="diagram-box muted">Lock held by another run<small>exit 0, nothing to do</small></div>
+        <div class="diagram-box">Lock acquired<small>write <code>app_settings.worker_tick</code> (health and the Admin queue read it)</small></div>
+      </div>
+      <div class="ar">↓</div>
+      <div class="diagram-box">Reset stale jobs<small>any job still <code>running</code>: at max attempts → <code>failed</code> (asset failed); otherwise → <code>queued</code>. No extra attempt is counted.</small></div>
+    </div>
+  </section>
+
+  <section class="diagram-panel loop" data-rough>
+    <p class="h"><span class="n">2</span> Job loop <span class="tag">repeats while under 50 min</span></p>
+    <div class="flow">
+      <div class="diagram-box">Claim the next job<small><code>state = queued</code>, <code>run_after ≤ now</code>, <code>attempts &lt; max</code> · order by priority, then oldest · <code>FOR UPDATE SKIP LOCKED</code> · set running, attempts + 1</small></div>
+      <div class="split">
+        <div class="diagram-box muted">Queue empty<small>leave the loop → step 3</small></div>
+        <div class="diagram-box">Got a job<small>run it by kind ↓</small></div>
+      </div>
+      <div class="kinds">
+        <div class="diagram-box">process / reprocess<small>sha256 the original, set <code>duplicate_of</code> → image: <code>images.py</code> · video: video pipeline</small></div>
+        <div class="diagram-box">retier<small>seal or unseal the files, add or drop the asset keys</small></div>
+        <div class="diagram-box">purge<small>remove the asset directory and rows</small></div>
+      </div>
+      <p class="diagram-muted note">While it runs: <code>jobs.step</code> and <code>progress</code> are written for the UI, and <code>jobs.state</code> is checked for cancel every 5 s.</p>
+      <div class="ar">↓</div>
+      <div class="outcomes">
+        <div class="diagram-box ok">Succeeded<small>job <code>done</code> · outputs swapped into <code>r&lt;rev&gt;/</code> · asset <code>ready</code> · ρ updated</small></div>
+        <div class="diagram-box warn">Failed, attempts left<small>back to <code>queued</code>, <code>run_after</code> = now + 5 min × attempts</small></div>
+        <div class="diagram-box bad">Failed for good, or cancelled<small>job <code>failed</code> / <code>cancelled</code> · a first-time process leaves the asset <code>failed</code></small></div>
+      </div>
+      <div class="ar">↓</div>
+      <div class="diagram-box">Write <code>worker_tick</code>, then claim again<small>the 50-minute deadline is checked between jobs only, so a long encode always finishes</small></div>
+    </div>
+  </section>
+
+  <section class="diagram-panel" data-rough>
+    <p class="h"><span class="n">3</span> Exit</p>
+    <div class="diagram-box">Process exits, flock releases the lock<small>the next cron minute starts a fresh tick</small></div>
+  </section>
+</div>
+```
+
+```css
+.wl { display: grid; gap: 12px; }
+.wl .diagram-panel { padding: 12px 14px; }
+.h { margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--wf-accent); color: var(--wf-accent); font-size: 12px; }
+.tag { font-weight: 400; font-size: 12px; color: var(--wf-muted); border: 1px dashed var(--wf-line); border-radius: 999px; padding: 1px 8px; }
+.loop { border-color: var(--wf-accent); }
+.flow { display: grid; gap: 8px; }
+.ar { text-align: center; color: var(--wf-muted); line-height: 1; }
+.split, .kinds, .outcomes { display: grid; gap: 8px; }
+.split { grid-template-columns: repeat(auto-fit, minmax(max(200px, 30%), 1fr)); }
+.kinds, .outcomes { grid-template-columns: repeat(auto-fit, minmax(max(190px, 30%), 1fr)); }
+.muted { opacity: .7; border-style: dashed; }
+.ok { border-color: var(--wf-accent); }
+.warn { border-color: var(--wf-warn); }
+.bad { border-color: var(--wf-warn); border-style: dashed; }
+.note { margin: 0; font-size: 12px; }
+.wl small { display: block; color: var(--wf-muted); font-size: 12px; margin-top: 3px; line-height: 1.4; }
+.wl code { font-size: 11.5px; overflow-wrap: anywhere; }
+```
+
+</Diagram>
 
 Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720p") and `jobs.progress`, which ffmpeg's `-progress pipe:1` provides as `out_time_ms` ÷ duration. These are the strings the queue and My uploads screens show. A child process is killed, with its process tree, after 3 × its expected cost, with a 10-minute minimum.
 
 - **Queue order.** Image, retier and purge jobs get priority 100 and videos get 0, so photos are never stuck behind a two-hour recording. "Move to the top" sets a job's priority to the current maximum + 1. The ETA function walks jobs in exactly this claim order.
-- **Attempts.** A crash costs one attempt, not two. The stale reset puts the job back with backoff and doesn't increment, and only the claim increments. Jobs at `max_attempts` are never claimed: they become `failed`, and so does their asset.
+- **Attempts.** A crash costs one attempt, not two. The claim increments `attempts`; the stale reset puts the job straight back in the queue without incrementing. A stale job already at `max_attempts` becomes `failed`, and so does its asset.
 - **Cancel.** Cancelling a queued job sets it `cancelled` straight away. For a running job, the worker checks `jobs.state` every 5 seconds while a child runs; on `cancelled` it kills the process tree and deletes `tmp/`. A first-time process job then leaves its asset `failed` with the message "Cancelled by an admin". A re-process job leaves the ready asset untouched.
 - **Retry** resets `attempts` to 0 and `run_after` to now. The uploader can retry through `POST /uploads/:assetId/retry`, admins through `/admin/jobs/:id/retry`.
 
@@ -721,13 +762,12 @@ Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720
 .h { margin: 0 0 8px; font-weight: 600; }
 .cls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .warn { border-color: var(--wf-warn); color: var(--wf-warn); }
-.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(240px, 45%), 1fr)); gap: 10px; }
 .fg { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ar { color: var(--wf-muted); }
 .rungs { display: grid; gap: 6px; }
 .out { border-color: var(--wf-accent); }
 .vp small { display: block; color: var(--wf-muted); font-size: 12px; margin-top: 2px; }
-@media (max-width: 760px) { .row2 { grid-template-columns: 1fr; } }
 ```
 
 </Diagram>
@@ -791,10 +831,9 @@ Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720
 .hit { border-color: var(--wf-accent); background: var(--wf-accent-soft); }
 .last { flex: 1.2 1 120px; }
 .seg small { display: block; color: var(--wf-muted); font-size: 11px; }
-.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(200px, 30%), 1fr)); gap: 10px; }
 .cols ul { margin: 0; padding-left: 16px; font-size: 13px; display: grid; gap: 4px; }
 .h { margin: 0 0 6px; font-weight: 600; }
-@media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
 ```
 
 </Diagram>

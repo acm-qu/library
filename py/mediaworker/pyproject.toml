@@ -20,3 +20,10 @@ include = ["mediaworker*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "ffmpeg: needs ffmpeg with zscale, lut3d and tonemap",
+  "tonemap: needs torch and pyiqa (the real DISTS/TOPIQ scorer)",
+  "validation: the gate's reviewed clips (set TONEMAP_CLIPS); run with -m validation",
+]
+addopts = "-m 'not validation'"
+tmp_path_retention_policy = "failed"

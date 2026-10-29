@@ -39,11 +39,11 @@ dir="$PLANS_DIR/$slug"
 [ -f "$dir/plan.mdx" ] || { echo "No plan.mdx in $dir" >&2; exit 1; }
 kind="$(frontmatter "$slug" kind)"; kind="${kind:-plan}"
 
-echo "Checking $slug…"
+echo "Checking ${slug}..."
 "${CLI[@]}" plan local check --dir "$dir" >/dev/null
 
 rm -f "$dir/.plan-url"
-echo "Serving $slug (Ctrl+C to stop)…"
+echo "Serving ${slug} (Ctrl+C to stop)..."
 "${CLI[@]}" plan local serve --dir "$dir" --kind "$kind" &
 server=$!
 trap 'kill "$server" 2>/dev/null || true' EXIT INT TERM

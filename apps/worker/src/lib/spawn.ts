@@ -66,7 +66,16 @@ export function run(cmd: string, args: string[], opts: RunOpts): Promise<{ stdou
 /** python -m mediaworker <cmd>: one JSON object on stdout, also on failure. */
 export function mediaworker<T>(python: string, args: string[], opts: RunOpts): Promise<T> {
   return new Promise((resolve, reject) => {
-    const child = spawn(python, ['-m', 'mediaworker', ...args], { cwd: opts.cwd, env: { ...process.env, ...THREAD_ENV }, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Its own process group, so a timeout or cancel also stops the ffmpeg it runs (tone-curve scoring scans and
+    // extracts frames); killing only Python would leave those running.
+    const child = spawn(python, ['-m', 'mediaworker', ...args], { cwd: opts.cwd, env: { ...process.env, ...THREAD_ENV }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const killTree = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    };
     try {
       if (child.pid) setPriority(child.pid, 10);
     } catch {
@@ -76,13 +85,28 @@ export function mediaworker<T>(python: string, args: string[], opts: RunOpts): P
     let stderr = '';
     child.stdout.on('data', (c: Buffer) => (stdout += c.toString()));
     child.stderr.on('data', (c: Buffer) => (stderr = (stderr + c.toString()).slice(-8000)));
-    const timer = setTimeout(() => child.kill('SIGKILL'), opts.timeoutMs);
+    let cancelled = false;
+    const timer = setTimeout(killTree, opts.timeoutMs);
+    const poll = opts.isCancelled
+      ? setInterval(
+          () =>
+            void opts.isCancelled!().then((c) => {
+              if (!c) return;
+              cancelled = true;
+              killTree();
+            }),
+          5000,
+        )
+      : null;
     child.on('error', (e) => {
       clearTimeout(timer);
+      if (poll) clearInterval(poll);
       reject(new ChildFailed(`${python}: ${e.message}`, 'spawn_failed', ''));
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      if (poll) clearInterval(poll);
+      if (cancelled) return reject(new ChildFailed(`mediaworker ${args[0]} cancelled`, 'cancelled', stderr));
       let out: (T & { error?: string; message?: string }) | null = null;
       try {
         out = JSON.parse(stdout);

@@ -1,11 +1,12 @@
-// Video job: probe and classify, encode the ladder as single-file HLS in one ffmpeg run, poster + thumb, then the
-// atomic swap. HDR uses the verified Hable fallback chain until automatic curve selection (Milestone 10).
+// Video job: probe and classify, choose the HDR tone curve, encode the ladder as single-file HLS in one ffmpeg run,
+// poster + thumb, then the atomic swap.
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { appSettings, type Asset, assets, type Job, jobs, processingRuns } from '@acm/core/db';
-import { DEFAULT_RHO, nextRho } from '@acm/core/eta';
+import { appSettings, type Asset, assets, type Job, jobs, processingRuns, TONE_CURVES, type ToneCurve } from '@acm/core/db';
+import { DEFAULT_RHO, nextRho, nextScoreSeconds, SCORE_SECONDS } from '@acm/core/eta';
 import { newId } from '@acm/core/ids';
-import { tmpDir } from '@acm/core/paths';
+import { lutPath, tmpDir, tonemapGatePath } from '@acm/core/paths';
 import { eq } from 'drizzle-orm';
 import { type Ctx, type JobScope, Permanent } from '../context.ts';
 import { baseFilter, classify, hlsArgs, ladder, parseMaster, type ProbeJson } from '../lib/ffmpeg.ts';
@@ -48,29 +49,24 @@ export async function processVideo(ctx: Ctx, job: Job, a: Asset, src: string, sc
 
   const runId = newId();
   const hdr = c.hdr !== 'sdr';
-  // Curve: an admin override, else the verified Hable fallback (automatic selection arrives in Milestone 10).
-  const curve = hdr ? (params.toneCurve ?? 'hable203') : null;
-  const lut = curve && curve !== 'hable203' ? path.join(ctx.cfg.LUTS_DIR, `${curve}.cube`) : undefined;
-  if (lut && !(await stat(lut).catch(() => null))) throw new Permanent('lut_missing', `no LUT for ${curve}`);
-  await ctx.db.insert(processingRuns).values({
-    id: runId,
-    assetId: a.id,
-    settingsVersion: 1,
-    toneCurve: curve as 'hable203' | null,
-    curveSource: !hdr ? 'none' : params.toneCurve ? 'override' : 'fallback',
-    startedAt: new Date(),
-  });
-
   const tmp = path.join(tmpDir(ctx.cfg.MEDIA_ROOT, job.id), 'out'); // tmp/ may also hold a decrypted source
   await rm(tmp, { recursive: true, force: true });
+  await ctx.db.insert(processingRuns).values({ id: runId, assetId: a.id, settingsVersion: 1, curveSource: hdr ? null : 'none', startedAt: new Date() });
+
   const encrypt = wantsEncryption(a);
   const keys = encrypt ? await getOrCreateKeys(ctx, a.id) : null;
-  const keyInfo = keys ? await writeKeyInfo(ctx, job.id, a.id, keys.hlsKey) : null;
+  let keyInfo: Awaited<ReturnType<typeof writeKeyInfo>> | null = null;
   const rungs = ladder(c.width, c.height);
-  for (const r of rungs) await mkdir(path.join(tmp, 'hls', r.name), { recursive: true });
-  const vf = baseFilter(c.hdr, lut);
   let tail = '';
   try {
+    // Curve first (scoring reads the source, never alongside the encode), then the table it needs.
+    const choice = c.hdr === 'sdr' ? null : await chooseCurve(ctx, scope, src, c.hdr, c.durationS, params, path.join(tmp, 'frames'));
+    await ctx.db.update(processingRuns).set({ toneCurve: choice?.curve ?? null, curveSource: choice?.source ?? 'none', scores: choice?.scores ?? null }).where(eq(processingRuns.id, runId));
+    const lut = choice && choice.curve !== FALLBACK ? await ensureLut(ctx, choice.curve, c.hdr as 'hlg' | 'pq') : undefined;
+    const vf = baseFilter(c.hdr, lut);
+    keyInfo = keys ? await writeKeyInfo(ctx, job.id, a.id, keys.hlsKey) : null;
+    for (const r of rungs) await mkdir(path.join(tmp, 'hls', r.name), { recursive: true });
+
     // Encode: 10% → 90% of the job's progress bar.
     await scope.step(hdr ? 'Converting HDR and encoding' : 'Encoding', 0.1);
     const encStart = Date.now();
@@ -121,6 +117,9 @@ export async function processVideo(ctx: Ctx, job: Job, a: Asset, src: string, sc
     let poster = 'poster.webp';
     let thumb = 'thumb.webp';
     if (keys) [poster, thumb] = (await sealAll(tmp, [poster, thumb], keys.fileKey, a.id)) as [string, string];
+    // Sampled frames ride along in r<rev>/frames/ (not renditions: only the admin's Item details reads them).
+    const frameDir = path.join(tmp, 'frames');
+    if (keys && existsSync(frameDir)) await sealAll(frameDir, (await readdir(frameDir)).filter((f) => f.endsWith('.webp')), keys.fileKey, a.id);
     const master = parseMaster(await readFile(path.join(tmp, 'hls', 'master.m3u8'), 'utf8'));
     const outs: Out[] = [
       { kind: 'hls_master', file: 'hls/master.m3u8', bytes: (await stat(path.join(tmp, 'hls', 'master.m3u8'))).size },
@@ -150,6 +149,57 @@ export async function processVideo(ctx: Ctx, job: Job, a: Asset, src: string, sc
     await rm(tmp, { recursive: true, force: true });
     await ctx.db.update(jobs).set({ estSeconds: null }).where(eq(jobs.id, job.id));
   }
+}
+
+const FALLBACK: ToneCurve = 'hable203';
+type Choice = { curve: ToneCurve; source: 'auto' | 'fallback' | 'override'; scores: Record<string, unknown> | null };
+type SelectOut = { curve: ToneCurve; source: 'auto' | 'fallback'; reason: string | null; candidates: unknown[]; best?: string; frames: { t: number; why: string }[]; size: number[]; ms: Record<string, number>; maxRssMb: number };
+
+/** Automatic selection runs only when an admin switched it on and the validation gate has passed on this host. */
+async function autoEnabled(ctx: Ctx): Promise<boolean> {
+  const [row] = await ctx.db.select().from(appSettings).where(eq(appSettings.key, 'tonemap_auto'));
+  return row?.value === true && existsSync(tonemapGatePath(ctx.cfg.LUTS_DIR));
+}
+
+/** Handoff §8.5: an admin override wins; then automatic selection when enabled; Hable (203) otherwise and on any error. */
+async function chooseCurve(ctx: Ctx, scope: JobScope, src: string, hdr: 'hlg' | 'pq', durationS: number, params: { toneCurve?: string }, framesOut: string): Promise<Choice> {
+  if (params.toneCurve && (TONE_CURVES as readonly string[]).includes(params.toneCurve)) return { curve: params.toneCurve as ToneCurve, source: 'override', scores: null };
+  if (!(await autoEnabled(ctx))) return { curve: FALLBACK, source: 'fallback', scores: null };
+  await scope.step('Scoring tone curves', 0.1);
+  for (const c of TONE_CURVES) await ensureLut(ctx, c, hdr);
+  try {
+    const r = await mediaworker<SelectOut>(
+      ctx.cfg.PYTHON,
+      ['select', '--src', src, '--transfer', hdr, '--luts', ctx.cfg.LUTS_DIR, '--ffmpeg', ctx.cfg.FFMPEG, '--ffprobe', ctx.cfg.FFPROBE, '--frames-out', framesOut],
+      // Keyframe scan ≈ real time / 20 on the host; scoring 8 frames × 4 curves is a few minutes.
+      { timeoutMs: 30 * 60_000 + durationS * 200, isCancelled: () => scope.isCancelled() },
+    );
+    ctx.log.info({ curve: r.curve, source: r.source, reason: r.reason, ms: r.ms, maxRssMb: r.maxRssMb }, 'tone curve chosen');
+    await updateScoreSeconds(ctx, (r.ms.total ?? 0) / 1000);
+    const frames = r.frames.map((f, n) => ({ ...f, n }));
+    return { curve: r.curve, source: r.source, scores: { candidates: r.candidates, best: r.best ?? null, reason: r.reason, frames, size: r.size, ms: r.ms, maxRssMb: r.maxRssMb } };
+  } catch (e) {
+    if (e instanceof ChildFailed && e.code === 'cancelled') throw e;
+    await rm(framesOut, { recursive: true, force: true });
+    const code = e instanceof ChildFailed ? e.code : 'error';
+    ctx.log.warn({ code, err: e instanceof Error ? e.message.slice(0, 300) : String(e) }, 'tone-curve scoring failed; using the fallback');
+    return { curve: FALLBACK, source: 'fallback', scores: { candidates: [], reason: 'scoring_failed', error: code } };
+  }
+}
+
+/** The table for one curve, generated on first use (`python -m mediaworker luts` writes them all in ~3 s). */
+async function ensureLut(ctx: Ctx, curve: ToneCurve, hdr: 'hlg' | 'pq'): Promise<string> {
+  const file = lutPath(ctx.cfg.LUTS_DIR, curve, hdr);
+  if (existsSync(file)) return file;
+  await mediaworker(ctx.cfg.PYTHON, ['luts', '--out', ctx.cfg.LUTS_DIR], { timeoutMs: 5 * 60_000 });
+  if (!existsSync(file)) throw new Permanent('lut_missing', `no table for ${curve} (${hdr})`);
+  return file;
+}
+
+async function updateScoreSeconds(ctx: Ctx, measuredS: number) {
+  const [row] = await ctx.db.select().from(appSettings).where(eq(appSettings.key, 'score_seconds'));
+  const value = Math.round(nextScoreSeconds(typeof row?.value === 'number' ? row.value : SCORE_SECONDS, measuredS));
+  await ctx.db.insert(appSettings).values({ key: 'score_seconds', value }).onConflictDoUpdate({ target: appSettings.key, set: { value } });
 }
 
 /** ρ tracks the real host: an EMA of encode seconds per second of video (scoring excluded). */

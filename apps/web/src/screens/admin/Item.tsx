@@ -1,5 +1,6 @@
 // Admin · Item details: source facts, copies, processing runs, tone curve with re-process, tier and delete.
 import { TONE_CURVES } from '@acm/core/enums';
+import { ToneScores } from '@acm/core/schemas';
 import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router';
@@ -34,7 +35,9 @@ export function ItemScreen() {
   if (!q.data) return <div className="skel" style={{ height: 400 }} aria-busy="true" />;
   const { asset: a, renditions, runs, jobs, reprocessEtaS } = q.data;
   const hdr = a.hdr === 'hlg' || a.hdr === 'pq';
-  const lastRun = runs[0];
+  // The run behind the copies people see now (a re-process in progress has its own, unfinished run).
+  const lastRun = runs.find((r) => r.ok) ?? runs[0];
+  const scores = ToneScores.safeParse(lastRun?.scores);
   const current = lastRun?.toneCurve ?? 'hable203';
   const busy = jobs.some((j) => j.state === 'queued' || j.state === 'running');
   const toTier = a.tier === 'member' ? 'core' : 'member';
@@ -80,8 +83,10 @@ export function ItemScreen() {
                 <h2 className="t-h2" id="h-tm">
                   {t('admin.i_curve')}
                 </h2>
-                <span className="t-sm muted">{!hdr ? t('admin.i_curveSdr') : lastRun?.curveSource === 'override' ? t('admin.i_curveOverride') : t('admin.i_curveFallback')}</span>
+                <span className="t-sm muted">{curveNote(t, hdr, lastRun?.curveSource ?? null, scores.success ? scores.data : null)}</span>
               </div>
+              {hdr && scores.success && scores.data.candidates.length > 0 && <ScoreTable s={scores.data} chosen={current} />}
+              {hdr && scores.success && !!scores.data.frames?.length && lastRun && <Frames assetId={a.id} runId={lastRun.id} frames={scores.data.frames} />}
               {hdr && (
                 <div role="radiogroup" aria-labelledby="h-tm" className="stack" style={{ gap: 6 }}>
                   {TONE_CURVES.map((c) => (
@@ -100,13 +105,14 @@ export function ItemScreen() {
                   cancel={t('admin.m_cancel')}
                   onCancel={() => setConfirm(null)}
                   busy={reprocess.isPending}
-                  onConfirm={() => void reprocess.mutateAsync([a.id, hdr && pick !== current ? pick : undefined]).then(() => setConfirm(null))}
+                  // "Current settings" keeps an admin's override; otherwise the curve is chosen again (automatically, or the fallback).
+                  onConfirm={() => void reprocess.mutateAsync([a.id, hdr && (pick !== current || lastRun?.curveSource === 'override') ? pick : undefined]).then(() => setConfirm(null))}
                 >
                   <Rich k="admin.i_confirmBody" values={{ duration: fmtEta(reprocessEtaS), time: readyAt(reprocessEtaS) }} />
                 </Confirm>
               ) : (
                 <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <button className="btn btn-s" disabled={busy} onClick={() => (setPick(current), setConfirm('reprocess'))}>
+                  <button className="btn btn-s" disabled={busy} onClick={() => (setPick(current), setConfirm('reprocess'))} title={t('admin.i_reprocessSameHint')}>
                     {t('admin.i_reprocessSame')}
                   </button>
                   {hdr && (
@@ -221,6 +227,92 @@ export function ItemScreen() {
         </aside>
       </div>
     </>
+  );
+}
+
+type T = ReturnType<typeof useTranslation>['t'];
+
+function curveNote(t: T, hdr: boolean, source: string | null, s: ToneScores | null): string {
+  if (!hdr) return t('admin.i_curveSdr');
+  if (source === 'override') return t('admin.i_curveOverride');
+  if (source === 'auto') return t('admin.i_curveAuto');
+  if (s?.reason === 'metrics_disagree') return t('admin.i_curveDisagree', { best: CURVE_NAMES[s.best ?? ''] ?? s.best ?? '' });
+  if (s?.reason) return t('admin.i_curveFailed', { code: s.error ?? s.reason });
+  return t('admin.i_curveFallback');
+}
+
+/** DISTS rank, TOPIQ rank and their sum per candidate (handoff §8.5, design handoff "Item details"). */
+function ScoreTable({ s, chosen }: { s: ToneScores; chosen: string }) {
+  const { t } = useTranslation();
+  const fmt = (v: number) => v.toFixed(3);
+  const rank = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="tbl">
+        <caption className="vh">{t('admin.i_scoresCaption')}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{t('admin.i_colCurve')}</th>
+            <th scope="col" className="num" title={t('admin.i_distsHint')}>
+              DISTS
+            </th>
+            <th scope="col" className="num" title={t('admin.i_topiqHint')}>
+              TOPIQ
+            </th>
+            <th scope="col" className="num">
+              {t('admin.i_colSum')}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {[...s.candidates]
+            .sort((x, y) => x.sum - y.sum)
+            .map((c) => (
+              <tr key={c.curve} aria-current={c.curve === chosen ? 'true' : undefined} style={c.curve === chosen ? { background: 'var(--surface-2)' } : undefined}>
+                <td>
+                  <span className="row" style={{ gap: 8 }}>
+                    {CURVE_NAMES[c.curve] ?? c.curve}
+                    {c.curve === chosen && <span className="st st-ok">{t('admin.i_chosen')}</span>}
+                  </span>
+                </td>
+                <td className="num">
+                  {rank(c.r_dists)} <span className="subtle t-xs">({fmt(c.dists)})</span>
+                </td>
+                <td className="num">
+                  {rank(c.r_topiq)} <span className="subtle t-xs">({fmt(c.topiq)})</span>
+                </td>
+                <td className="num">{rank(c.sum)}</td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The 8 scored frames on a timeline, as the chosen curve renders them. */
+function Frames({ assetId, runId, frames }: { assetId: string; runId: string; frames: NonNullable<ToneScores['frames']> }) {
+  const { t } = useTranslation();
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <span className="label">{t('admin.i_frames')}</span>
+      <ol className="row" style={{ listStyle: 'none', margin: 0, padding: 0, gap: 6, overflowX: 'auto' }}>
+        {frames.map((f) => (
+          <li key={f.n} className="stack" style={{ gap: 2, flex: '0 0 auto' }}>
+            <img
+              src={`/api/admin/assets/${assetId}/frames/${f.n}?r=${runId}`}
+              alt={t('admin.i_frameAlt', { time: fmtDuration(f.t) })}
+              loading="lazy"
+              style={{ height: 64, width: 'auto', borderRadius: 4, background: 'var(--surface-2)' }}
+            />
+            <span className="t-xs tnum subtle">
+              {fmtDuration(f.t)}
+              {f.why === 'bright' && ` · ${t('admin.i_frameBright')}`}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 

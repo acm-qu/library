@@ -1,15 +1,16 @@
 // Queue position → ETA, using the shared formula. Jobs are taken in the worker's claim order.
 import { appSettings, assets, type Db, jobs } from '@acm/core/db';
-import { DEFAULT_RHO, queueEtas, type Rho } from '@acm/core/eta';
+import { DEFAULT_RHO, HDR_FIXED_SECONDS, queueEtas, type Rho, SCORE_SECONDS } from '@acm/core/eta';
 import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
 export async function loadRho(db: Db): Promise<Rho> {
-  const rows = await db.select().from(appSettings).where(inArray(appSettings.key, ['rho_sdr', 'rho_hdr']));
+  const rows = await db.select().from(appSettings).where(inArray(appSettings.key, ['rho_sdr', 'rho_hdr', 'score_seconds', 'tonemap_auto']));
   const get = (k: string, d: number) => {
     const v = rows.find((r) => r.key === k)?.value;
     return typeof v === 'number' && v > 0 ? v : d;
   };
-  return { sdr: get('rho_sdr', DEFAULT_RHO.sdr), hdr: get('rho_hdr', DEFAULT_RHO.hdr) };
+  const auto = rows.find((r) => r.key === 'tonemap_auto')?.value === true;
+  return { sdr: get('rho_sdr', DEFAULT_RHO.sdr), hdr: get('rho_hdr', DEFAULT_RHO.hdr), hdrFixed: auto ? get('score_seconds', SCORE_SECONDS) : HDR_FIXED_SECONDS };
 }
 
 export type ActiveJob = { jobId: string; assetId: string | null; kind: string; state: string; step: string | null; progress: number | null; readyInS: number };

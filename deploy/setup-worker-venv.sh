@@ -16,3 +16,5 @@ spec="$REL/py/mediaworker"
 [ "${2:-}" = "--with-tonemap" ] && spec="$REL/py/mediaworker[tonemap]"
 "$VENV/bin/pip" install --quiet --upgrade "${extra[@]}" "$spec"
 "$VENV/bin/python" -m mediaworker versions
+# DISTS and TOPIQ-FR weights (~0.6 GB, once) go into ~/.cache now, so a job never downloads anything.
+[ "${2:-}" = "--with-tonemap" ] && "$VENV/bin/python" -m mediaworker tonemap-weights

@@ -4,8 +4,10 @@ import { existsSync } from 'node:fs';
 import { statfs } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerConfig } from '@acm/core/config';
-import { appSettings, assets, type Db, events, jobs, processingRuns, renditions, sessions, users } from '@acm/core/db';
+import { parseMasterKey, unwrapKey } from '@acm/core/crypto';
+import { appSettings, assetKeys, assets, type Db, events, jobs, processingRuns, renditions, sessions, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
+import { revDir, tonemapGatePath } from '@acm/core/paths';
 import {
   AdminJobQuery,
   AdminUserQuery,
@@ -26,7 +28,8 @@ import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { thumbUrl } from '../lib/dto.ts';
 import { HttpError, notFound } from '../lib/errors.ts';
-import { activeJobs } from '../lib/queue.ts';
+import { activeJobs, loadRho } from '../lib/queue.ts';
+import { sendFile, sendSealed } from './media.ts';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 const OffsetCursor = z.object({ o: z.number().int().min(0) });
@@ -40,7 +43,8 @@ const putSetting = (db: Pick<Db, 'insert'>, key: string, value: unknown) =>
   db.insert(appSettings).values({ key, value }).onConflictDoUpdate({ target: appSettings.key, set: { value } });
 
 export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: ServerConfig }) {
-  const gatePassed = () => existsSync(path.join(cfg.LUTS_DIR, 'gate-passed.json'));
+  const gatePassed = () => existsSync(tonemapGatePath(cfg.LUTS_DIR));
+  const master = parseMasterKey(cfg.MASTER_KEY);
 
   // ── Members ────────────────────────────────────────────────────────────────────────────────────────
   app.get('/api/admin/users', { preHandler: requireAdmin }, async (req) => {
@@ -293,8 +297,8 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
       db.select().from(jobs).where(eq(jobs.assetId, a.id)).orderBy(desc(jobs.createdAt)).limit(20),
       activeJobs(db),
     ]);
-    const { jobCost, DEFAULT_RHO } = await import('@acm/core/eta');
-    const own = jobCost({ kind: a.kind, hdr: a.hdr, durationS: a.durationS, progress: null }, DEFAULT_RHO);
+    const { jobCost } = await import('@acm/core/eta');
+    const own = jobCost({ kind: a.kind, hdr: a.hdr, durationS: a.durationS, progress: null }, await loadRho(db));
     return {
       asset: {
         id: a.id,
@@ -322,9 +326,20 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
     };
   });
 
-  // Sampled frames arrive with automatic tone-curve selection (Milestone 10).
-  app.get('/api/admin/assets/:id/frames/:n', { preHandler: requireAdmin }, async () => {
-    throw notFound();
+  // The frames automatic tone-curve selection scored, as the chosen curve renders them (r<rev>/frames/<n>.webp).
+  app.get('/api/admin/assets/:id/frames/:n', { preHandler: requireAdmin }, async (req, reply) => {
+    const p = z.object({ id: z.string(), n: z.coerce.number().int().min(0).max(15) }).safeParse(req.params);
+    if (!p.success) throw notFound();
+    const { a } = await adminAsset(p.data.id);
+    if (a.kind !== 'video' || a.renditionRev < 1) throw notFound();
+    const file = path.join(revDir(cfg.MEDIA_ROOT, a.id, a.renditionRev), 'frames', `${p.data.n}.webp`);
+    // The URL carries ?r=<run id>, so a re-process gets a new URL and the long cache is safe.
+    const headers = { 'Cache-Control': 'private, max-age=86400' };
+    if (existsSync(file)) return sendFile(req, reply, file, 'image/webp', headers);
+    if (!existsSync(`${file}.enc`)) throw notFound();
+    const [k] = await db.select().from(assetKeys).where(eq(assetKeys.assetId, a.id));
+    if (!k) throw notFound();
+    return sendSealed(req, reply, `${file}.enc`, unwrapKey(k.fileKeyWrapped, master), a.id, 'image/webp', headers);
   });
 
   app.post('/api/admin/assets/:id/reprocess', { preHandler: requireAdmin }, async (req, reply) => {

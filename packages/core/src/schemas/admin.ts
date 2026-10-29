@@ -59,6 +59,18 @@ export const AdminJobPage = page(AdminJob).extend({
 });
 
 export const ReprocessBody = z.object({ toneCurve: z.enum(TONE_CURVES).optional() });
+
+/** processing_runs.scores for an HDR video: written by automatic tone-curve selection (handoff §8.5). */
+export const ToneScores = z.object({
+  candidates: z.array(z.object({ curve: z.string(), dists: z.number(), topiq: z.number(), r_dists: z.number(), r_topiq: z.number(), sum: z.number() })),
+  /** Lowest rank sum, even when the metrics disagreed and the fallback was used. */
+  best: z.string().nullable().optional(),
+  /** Why the fallback was used: 'metrics_disagree' | 'score_not_finite' | 'scoring_failed'. */
+  reason: z.string().nullable().optional(),
+  error: z.string().optional(),
+  frames: z.array(z.object({ t: z.number(), why: z.string(), n: z.number() })).optional(),
+});
+export type ToneScores = z.infer<typeof ToneScores>;
 export const ResolveBody = z.object({ action: z.enum(['process_default', 'original_only']) });
 
 export const AppSettings = z.object({

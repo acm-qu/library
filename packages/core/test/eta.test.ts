@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RHO, jobCost, nextRho, queueEtas } from '../src/eta.ts';
+import { DEFAULT_RHO, jobCost, nextRho, nextScoreSeconds, queueEtas } from '../src/eta.ts';
 
 describe('ETA', () => {
   it('prices jobs per the handoff formula', () => {
     expect(jobCost({ kind: 'image', hdr: null, durationS: null, progress: null }, DEFAULT_RHO)).toBe(3);
     expect(jobCost({ kind: 'video', hdr: 'sdr', durationS: 100, progress: null }, DEFAULT_RHO)).toBeCloseTo(60);
     expect(jobCost({ kind: 'video', hdr: 'hlg', durationS: 100, progress: null }, DEFAULT_RHO)).toBeCloseTo(180);
+    // With automatic tone-curve selection on, the fixed HDR cost is the measured scoring time.
+    expect(jobCost({ kind: 'video', hdr: 'hlg', durationS: 100, progress: null }, { ...DEFAULT_RHO, hdrFixed: 340 })).toBeCloseTo(460);
+    expect(nextScoreSeconds(340, 200)).toBeCloseTo(312);
+    expect(nextScoreSeconds(340, 0)).toBe(340);
   });
 
   it('sums in claim order and discounts the running job by its progress', () => {

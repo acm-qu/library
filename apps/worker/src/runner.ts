@@ -65,7 +65,8 @@ export async function runJob(ctx: Ctx, job: Job) {
     await ctx.db.update(jobs).set({ state: 'done', outcome: outcome ?? 'ok', finishedAt: new Date(), step: null, progress: 1, lastError: null }).where(eq(jobs.id, job.id));
     ctx.log.info({ job: job.id, kind: job.kind, asset: job.assetId, ms: Date.now() - started, outcome: outcome ?? 'ok' }, 'job done');
   } catch (e) {
-    if (e instanceof Cancelled) {
+    // A child killed because the job was cancelled reports ChildFailed('cancelled'); it is a cancel, not a failure.
+    if (e instanceof Cancelled || (e instanceof ChildFailed && e.code === 'cancelled')) {
       await ctx.db.update(jobs).set({ finishedAt: new Date(), step: null }).where(eq(jobs.id, job.id));
       await markAssetFailed(ctx, job);
       ctx.log.info({ job: job.id }, 'job cancelled');

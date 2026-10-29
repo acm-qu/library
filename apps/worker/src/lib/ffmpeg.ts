@@ -91,13 +91,15 @@ export function ladder(width: number, height: number): Rung[] {
   return [{ ...LADDER[0]!, name: `${h}p`, h }];
 }
 
-/** Video filter before the split: SDR passes through; HDR uses the Hable fallback chain verified on the host. */
+/** Video filter before the split: SDR passes through; HDR uses the verified Hable chain, or a curve's table. */
 export function baseFilter(hdr: 'sdr' | 'hlg' | 'pq', lut?: string): string {
   if (hdr === 'sdr') return 'format=yuv420p';
   const tin = hdr === 'hlg' ? 'arib-std-b67' : 'smpte2084';
   if (lut) {
-    // Table path (Milestone 10): RGB without changing transfer or primaries, apply the curve, then BT.709 TV range.
-    return `zscale=tin=${tin}:min=bt2020nc:pin=bt2020:t=${tin}:p=bt2020,format=gbrpf32le,lut3d=file='${lut.replace(/'/g, "\\'")}':interp=tetrahedral,zscale=t=bt709:m=bt709:p=bt709:r=tv,format=yuv420p`;
+    // Table path: RGB without changing transfer or primaries, apply the curve, then BT.709 TV-range YUV. lut3d
+    // leaves the frame tagged HLG/PQ + BT.2020, so the last zscale is told its input is already BT.709 (tin, pin);
+    // otherwise it would convert the transfer and primaries a second time.
+    return `zscale=tin=${tin}:min=bt2020nc:pin=bt2020:t=${tin}:p=bt2020,format=gbrpf32le,lut3d=file='${lut.replace(/'/g, "\\'")}':interp=tetrahedral,zscale=tin=bt709:pin=bt709:t=bt709:p=bt709:m=bt709:r=tv,format=yuv420p`;
   }
   return `zscale=tin=${tin}:min=bt2020nc:pin=bt2020:t=linear:npl=203,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p`;
 }

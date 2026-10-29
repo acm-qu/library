@@ -408,6 +408,8 @@ Steps, each idempotent:
 
 ### 8.5 Automatic tone-curve selection (Decided design; ships behind `tonemap_auto=false` until validated)
 
+> **Corrected in implementation:** PU21, the HLG reference and ε below differ from what was built. See `docs/decisions/tone-curves.md`.
+
 **Candidates** ($K = 4$), each a 65³ `.cube` table mapping BT.2020 HLG RGB′ → BT.709 RGB′. Each implements the full conversion $S = \varepsilon\circ T\circ M\circ\ell$ (decode HLG with reference white at 203 nits, BT.2020→BT.709 matrix with clipping, tone curve on $\max(r,g,b)$ with the RGB ratios preserved, BT.709 OETF):
 - `hable203`: Hable filmic curve, $A..F = 0.15, 0.50, 0.10, 0.20, 0.02, 0.30$, normalised by $u(x_{\max})$.
 - `reinhard203`: $x/(1+x)$.
@@ -443,7 +445,7 @@ Generate the tables with `scripts/build-luts.sh` → `python -m mediaworker.tone
 
 ### 8.6 ETA (Decided)
 $$\text{ETA}(\text{job}) = \sum_{\text{jobs ahead, incl. current remainder}} c(j), \qquad c(j) = \begin{cases}\rho_{\text{sdr}}\,D_j & \text{SDR video}\\ \rho_{\text{hdr}}\,D_j + 60\text{ s} & \text{HDR video}\\ 3\text{ s} & \text{image}\end{cases}$$
-- Initial constants: $\rho_{\text{sdr}} = 0.6$, $\rho_{\text{hdr}} = 1.2$.
+- Initial constants: $\rho_{\text{sdr}} = 0.6$, $\rho_{\text{hdr}} = 1.2$. While `tonemap_auto` is on, the fixed HDR cost is the measured scoring time (starts at 340 s, EMA in `score_seconds`) instead of 60 s.
 - Refine them with an exponential moving average of measured $T/D$ after each job, stored in `app_settings`.
 
 ### 8.7 Process hygiene (Decided, required)

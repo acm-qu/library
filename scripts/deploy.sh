@@ -34,6 +34,8 @@ $NODE --env-file=$BASE/shared/.env migrate.mjs
 ln -sfn releases/$sha $BASE/current.new && mv -T $BASE/current.new $BASE/current
 # Passenger's app root is the fixed launcher dir $BASE/app (registered in Setup Node.js App); it loads current/.
 mkdir -p $BASE/app/tmp && touch $BASE/app/tmp/restart.txt
+# Tone-curve tables + validation gate (reused when nothing changed). A failed gate only keeps tonemap_auto off.
+$NODE --env-file=$BASE/shared/.env worker/tonemap-gate.mjs >> \$HOME/logs/acm-gate.log 2>&1 || echo "tone-curve gate crashed; see ~/logs/acm-gate.log"
 ls -1dt $BASE/releases/* | tail -n +6 | xargs -r rm -rf --
 REMOTE
 

@@ -2,6 +2,7 @@
 //   tus/<uploadId>(.json)          in-flight uploads
 //   assets/<shard>/<id>/original.<ext>[.enc]
 //   assets/<shard>/<id>/r<rev>/... renditions of one processing revision
+//   assets/<shard>/<id>/r<rev>/frames/<n>.webp[.enc]  frames sampled for tone-curve scoring (HDR video, auto)
 //   tmp/<jobId>/                   worker scratch, removed after each job
 import path from 'node:path';
 
@@ -14,3 +15,8 @@ export const originalPath = (mediaRoot: string, id: string, ext: string, encrypt
 export const revDir = (mediaRoot: string, id: string, rev: number) => path.join(assetDir(mediaRoot, id), `r${rev}`);
 export const tusDir = (mediaRoot: string) => path.join(mediaRoot, 'tus');
 export const tmpDir = (mediaRoot: string, jobId: string) => path.join(mediaRoot, 'tmp', jobId);
+
+/** One tone-curve table under LUTS_DIR, as written by `python -m mediaworker luts`. */
+export const lutPath = (lutsDir: string, curve: string, transfer: 'hlg' | 'pq') => path.join(lutsDir, `${curve}.${transfer}.cube`);
+/** Written by the tone-curve validation gate; tonemap_auto can only be switched on while it exists. */
+export const tonemapGatePath = (lutsDir: string) => path.join(lutsDir, 'gate-passed.json');

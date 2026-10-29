@@ -169,16 +169,13 @@ describe('admin overrides', () => {
     expect((await db.select().from(assets).where(eq(assets.id, id)))[0]).toMatchObject({ status: 'ready', hdr: 'sdr' });
   }, 60_000);
 
-  it('a curve override without its LUT fails clearly', async () => {
+  it('a curve override on an SDR source is ignored (nothing to tone map)', async () => {
     const id = await queuedVideo(`${fx}/land.mp4`);
-    await db.update(assets).set({ hdr: 'hlg' }).where(eq(assets.id, id));
-    const { classify: _c } = await import('../src/lib/ffmpeg.ts');
-    void _c;
     await db.delete(jobs);
     await db.insert(jobs).values({ id: newId(), assetId: id, kind: 'reprocess', params: { toneCurve: 'bt2390' } });
     await runUntil(ctx);
-    // land.mp4 is SDR, so the curve doesn't apply and the job succeeds without needing a LUT.
     expect((await db.select().from(jobs))[0]).toMatchObject({ state: 'done' });
+    expect((await db.select().from(processingRuns).where(eq(processingRuns.assetId, id)))[0]).toMatchObject({ toneCurve: null, curveSource: 'none' });
   }, 60_000);
 
   it('records storage stats with a daily history', async () => {

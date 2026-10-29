@@ -32,7 +32,10 @@ export const ServerConfig = z
     FFMPEG: z.string().default('ffmpeg'),
     FFPROBE: z.string().default('ffprobe'),
     PYTHON: z.string().default('python3'),
+    /** Tone-curve tables and the validation gate's result. Generated on the server, outside any release. */
     LUTS_DIR: z.string().default('./luts'),
+    /** The reviewed clips the validation gate scores (IMG_4515.MOV + T_*.mp4), kept out of git. */
+    TONEMAP_CLIPS: z.string().default('./.data/tonemap-validation'),
     /** Built web app (apps/web/dist). Unset in development, where Vite serves the UI and proxies /api. */
     WEB_ROOT: z.string().optional(),
     UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(20 * 2 ** 30),

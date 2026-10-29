@@ -1,5 +1,5 @@
 // Build a release directory for the server (dist/release):
-//   api/main.mjs + api/app.cjs (Passenger startup file) · worker/{run,cleanup,stats}.mjs · migrate.mjs
+//   api/main.mjs + api/app.cjs (Passenger startup file) · worker/{run,cleanup,stats,tonemap-gate}.mjs · migrate.mjs
 //   migrations/ · web/ (Vite build) · py/mediaworker (pip-installable) · package.json (pg + sodium-native only)
 // Everything else is bundled, so the server's node_modules holds two packages instead of ~30,000 files.
 import { execFileSync } from 'node:child_process';
@@ -28,6 +28,7 @@ const entries = {
   'worker/run': 'apps/worker/src/run.ts',
   'worker/cleanup': 'apps/worker/src/cleanup-cli.ts',
   'worker/stats': 'apps/worker/src/stats-cli.ts',
+  'worker/tonemap-gate': 'apps/worker/src/gate-cli.ts',
   migrate: 'scripts/migrate.ts',
 };
 await build({
@@ -65,7 +66,6 @@ cpSync(path.join(root, 'py/mediaworker'), path.join(out, 'py/mediaworker'), {
   recursive: true,
   filter: (src) => !/(\.venv|__pycache__|\.pytest_cache|\.egg-info|tests)(\/|$)/.test(src),
 });
-cpSync(path.join(root, 'luts'), path.join(out, 'luts'), { recursive: true });
 cpSync(path.join(root, 'deploy'), path.join(out, 'deploy'), { recursive: true });
 
 const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
