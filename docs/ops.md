@@ -40,7 +40,7 @@ scripts/deploy.sh --rollback <sha>
 
 ## Cron
 
-Install `deploy/crontab.template` with `crontab`. It runs:
+Install `deploy/crontab.template` with `crontab`. Or add each line in cPanel's Cron Jobs page, which edits the same crontab (`cpapi2 Cron` does not work over SSH here because of CageFS). It runs:
 - the worker every minute (under `flock`, so only one runs at a time);
 - cleanup hourly;
 - storage stats and the database backup nightly;
