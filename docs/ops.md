@@ -9,7 +9,7 @@ something goes wrong. Security details are in `docs/security.md`.
 |---|---|
 | `~/apps/acm-media/releases/<sha>/` | One built release: `api/`, `worker/`, `web/`, `migrate.mjs`, `migrations/`, `py/`, `node_modules/` (pg, sodium-native) |
 | `~/apps/acm-media/current` | Symlink to the live release |
-| `~/apps/acm-media/app/` | Passenger app root registered in cPanel **Setup Node.js App** (Node 24, startup file `start.cjs`). `start.cjs` loads `current/api/app.cjs`, so the registration never changes; restart with `touch ~/apps/acm-media/app/tmp/restart.txt` or the Restart button |
+| `~/apps/acm-media/app/` | Passenger app root registered in cPanel **Setup Node.js App** (Node 24, startup file `start.cjs`). `start.cjs` loads `current/api/app.cjs`, so the registration never changes; restart with `pkill -u $USER -f '^lsnode:/home/quhosting/apps/acm-media/app/'` (LiteSpeed respawns it on the next request; it ignores `tmp/restart.txt`, and the selector's Restart did not replace the processes either) |
 | `~/apps/acm-media/shared/.env` | All secrets and paths (chmod 600). The only copy of `MASTER_KEY` besides the password manager |
 | `~/apps/acm-media/shared/{backup,health}.sh` | Cron scripts (from `deploy/`) |
 | `~/media/` | `tus/` uploads in flight · `assets/<shard>/<id>/` originals and copies · `tmp/<job>/` scratch |
@@ -57,7 +57,7 @@ Install `deploy/crontab.template` with `crontab`. It runs:
 
 | Symptom | Look at | Usual fix |
 |---|---|---|
-| Site down / 503 | `~/logs/` Passenger error log in cPanel, `curl localhost` health | `touch ~/apps/acm-media/app/tmp/restart.txt`; roll back if a deploy just happened |
+| Site down / 503 | `~/logs/` Passenger error log in cPanel, `curl localhost` health | `pkill -u $USER -f '^lsnode:/home/quhosting/apps/acm-media/app/'`; roll back if a deploy just happened |
 | Uploads stall at the same % | Browser console, request size errors | Passenger/Apache body limit: chunks are 8 MiB; lower `chunkSize` in `apps/web/src/lib/uploader.ts` to 5 MiB if the host caps it |
 | Everything "Queued", nothing moves | `~/logs/acm-worker.log` | Cron missing or the lock file stuck: `rm ~/tmp/acm-worker.lock` only if no worker process is running (`pgrep -f run.mjs`) |
 | A video keeps failing | Admin · Item details → Jobs, `last_error` | `decode_failed`/`unsupported_codec`: ask for the original file again, or "Keep original only" |
