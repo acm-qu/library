@@ -8,7 +8,8 @@ dependencies = ["pillow>=11", "pillow-heif>=1.0", "numpy>=2"]
 [project.optional-dependencies]
 # Automatic tone-curve selection. Installed by deploy/setup-worker-venv.sh --with-tonemap from the CPU-only
 # PyTorch index, into the worker's own venv.
-tonemap = ["torch", "torchvision", "pyiqa"]
+# pyiqa is PolyForm Noncommercial + S-Lab (non-commercial only); pinned to the version the gate and licence were checked on.
+tonemap = ["torch", "torchvision", "pyiqa==0.1.16"]
 dev = ["pytest>=8"]
 
 [build-system]

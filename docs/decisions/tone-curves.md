@@ -62,4 +62,8 @@ every case. That is why the gate accepts either Hable clip first.
 
 - Nothing changes for uploads until someone switches `tonemap_auto` on and the gate passes on the server.
 - Admin overrides (`toneCurve` on a reprocess) work today, with or without the gate.
-- `pyiqa`'s licence (PyPI: Apache; README: CC BY-NC-SA 4.0) is still open (handoff open question 11).
+- `pyiqa` 0.1.16 is licensed PolyForm Noncommercial 1.0.0, with parts under the S-Lab License 1.0 (also
+  non-commercial); checked from the installed package's `licenses/`, 29 Oct 2026. Both allow this use: an
+  educational, non-commercial chapter library, with pyiqa installed from PyPI and not redistributed. It is pinned,
+  because a new version could change the licence or the scores the gate validated. Commercial reuse of this repo's
+  automatic selection would need the authors' permission; the rest of the repo is MIT and doesn't include pyiqa.

@@ -439,7 +439,7 @@ Generate the tables with `scripts/build-luts.sh` → `python -m mediaworker.tone
 - The repo includes `T_hable_100/203`, `T_mobius_100/203`, `T_reinhard_100/203` (10 s clips) and the chapter's human ranking: `hable_203` best, Reinhard better than Möbius.
 - `pytest -m validation` must reproduce **hable_203 first**.
 
-**Open:** check the pyiqa license before deployment. PyPI metadata says Apache, while the README states CC BY-NC-SA 4.0. Non-commercial internal use is expected.
+**Licence (resolved 29 Oct 2026):** pyiqa 0.1.16 is PolyForm Noncommercial 1.0.0 plus the S-Lab License 1.0, both non-commercial. That allows this use; see `docs/decisions/tone-curves.md`.
 
 **Cost:** about $K \times N = 32$ scorings per HDR video. Measure on the server and log it; run scoring before encoding, never concurrently.
 
@@ -693,7 +693,7 @@ hls.js configuration:
 | 8 | Queue reordering | Admin `priority` field exists; UI optional |
 | 9 | Arabic / RTL | Not in interim UI; the API stores UTF-8 everywhere |
 | 10 | PQ `npl` value | 203 until Samsung samples are tested |
-| 11 | pyiqa licence | Confirm before enabling `tonemap_auto` |
+| 11 | pyiqa licence | Resolved: PolyForm Noncommercial + S-Lab, fine for non-commercial use (pinned to 0.1.16) |
 
 ## 17. Out of scope (v1)
 
