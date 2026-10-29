@@ -1,0 +1,16 @@
+keys
+.env
+.plan-url
+
+# build and local data
+node_modules/
+dist/
+.data/
+.env.local
+*.tsbuildinfo
+.venv/
+__pycache__/
+.pytest_cache/
+test-results/
+playwright-report/
+*.egg-info/

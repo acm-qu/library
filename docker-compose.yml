@@ -1,0 +1,12 @@
+# Local development database. Production runs PostgreSQL 9.6.24 (cPanel), so we test against the same major.
+services:
+  db:
+    image: postgres:9.6
+    environment:
+      POSTGRES_USER: acm
+      POSTGRES_PASSWORD: acm
+      POSTGRES_DB: acm_media
+    ports: ["55496:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+volumes:
+  pgdata: {}

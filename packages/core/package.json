@@ -1,0 +1,27 @@
+{
+  "name": "@acm/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./enums": "./src/enums.ts",
+    "./schemas": "./src/schemas/index.ts",
+    "./db": "./src/db/index.ts",
+    "./crypto": "./src/crypto/index.ts",
+    "./eta": "./src/eta.ts",
+    "./status": "./src/status.ts",
+    "./ids": "./src/ids.ts",
+    "./config": "./src/config.ts",
+    "./paths": "./src/paths.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1",
+    "sodium-native": "~4.3.3",
+    "uuidv7": "^1.2.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

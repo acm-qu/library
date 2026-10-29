@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["scripts", "drizzle.config.ts", "vitest.config.ts", "packages/core/src/crypto/sodium-native.d.ts"]
+}

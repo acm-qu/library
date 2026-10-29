@@ -1,0 +1,36 @@
+{
+  "name": "acm-media-library",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build -w @acm/web && node scripts/build-server.mjs",
+    "typecheck": "tsc -p . && tsc -p packages/core && tsc -p apps/api && tsc -p apps/worker && tsc -p apps/web",
+    "test": "vitest run",
+    "test:py": "cd py/mediaworker && .venv/bin/python -m pytest -q",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file-if-exists=.env.local scripts/migrate.ts",
+    "db:up": "docker compose up -d db",
+    "bootstrap-admin": "tsx --env-file-if-exists=.env.local scripts/bootstrap-admin.ts",
+    "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
+    "rotate-master-key": "tsx --env-file-if-exists=.env.local scripts/rotate-master-key.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@acm/core": "*"
+  }
+}

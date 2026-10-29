@@ -1,0 +1,162 @@
+// Video job: probe and classify, encode the ladder as single-file HLS in one ffmpeg run, poster + thumb, then the
+// atomic swap. HDR uses the verified Hable fallback chain until automatic curve selection (Milestone 10).
+import { mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { appSettings, type Asset, assets, type Job, jobs, processingRuns } from '@acm/core/db';
+import { DEFAULT_RHO, nextRho } from '@acm/core/eta';
+import { newId } from '@acm/core/ids';
+import { tmpDir } from '@acm/core/paths';
+import { eq } from 'drizzle-orm';
+import { type Ctx, type JobScope, Permanent } from '../context.ts';
+import { baseFilter, classify, hlsArgs, ladder, parseMaster, type ProbeJson } from '../lib/ffmpeg.ts';
+import { ChildFailed, mediaworker, run } from '../lib/spawn.ts';
+import { getOrCreateKeys, writeKeyInfo } from '../lib/keys.ts';
+import { sealAll, wantsEncryption } from '../lib/seal.ts';
+import { type Out, publish } from './publish.ts';
+
+async function probe(ctx: Ctx, src: string): Promise<ProbeJson> {
+  try {
+    const { stdout } = await run(ctx.cfg.FFPROBE, ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', src], { timeoutMs: 60_000 });
+    return JSON.parse(stdout) as ProbeJson;
+  } catch (e) {
+    if (e instanceof ChildFailed && e.code === 'exit') throw new Permanent('decode_failed', 'ffprobe could not read the file');
+    throw e;
+  }
+}
+
+async function bytesIn(dir: string): Promise<number> {
+  let n = 0;
+  for (const f of await readdir(dir)) n += (await stat(path.join(dir, f))).size;
+  return n;
+}
+
+export async function processVideo(ctx: Ctx, job: Job, a: Asset, src: string, scope: JobScope): Promise<'ok' | 'needs_review'> {
+  await scope.step('Reading video', 0.08);
+  const params = (job.params ?? {}) as { force?: boolean; toneCurve?: string; curveSource?: string };
+  const c = classify(await probe(ctx, src), params.force === true);
+  if (c.kind === 'needs_review') {
+    await ctx.db
+      .update(assets)
+      .set({ status: 'needs_review', reviewReason: c.reason, hdr: 'unknown', sourceInfo: { transfer: c.transfer }, updatedAt: new Date() })
+      .where(eq(assets.id, a.id));
+    return 'needs_review';
+  }
+  await ctx.db
+    .update(assets)
+    .set({ width: c.width, height: c.height, durationS: c.durationS, fps: c.fps, hdr: c.hdr, device: c.device ?? a.device, capturedAt: c.capturedAt ? new Date(c.capturedAt) : a.capturedAt, sourceInfo: { vfr: c.vfr, hasAudio: c.hasAudio, dvProfile: c.dvProfile } })
+    .where(eq(assets.id, a.id));
+
+  const runId = newId();
+  const hdr = c.hdr !== 'sdr';
+  // Curve: an admin override, else the verified Hable fallback (automatic selection arrives in Milestone 10).
+  const curve = hdr ? (params.toneCurve ?? 'hable203') : null;
+  const lut = curve && curve !== 'hable203' ? path.join(ctx.cfg.LUTS_DIR, `${curve}.cube`) : undefined;
+  if (lut && !(await stat(lut).catch(() => null))) throw new Permanent('lut_missing', `no LUT for ${curve}`);
+  await ctx.db.insert(processingRuns).values({
+    id: runId,
+    assetId: a.id,
+    settingsVersion: 1,
+    toneCurve: curve as 'hable203' | null,
+    curveSource: !hdr ? 'none' : params.toneCurve ? 'override' : 'fallback',
+    startedAt: new Date(),
+  });
+
+  const tmp = path.join(tmpDir(ctx.cfg.MEDIA_ROOT, job.id), 'out'); // tmp/ may also hold a decrypted source
+  await rm(tmp, { recursive: true, force: true });
+  const encrypt = wantsEncryption(a);
+  const keys = encrypt ? await getOrCreateKeys(ctx, a.id) : null;
+  const keyInfo = keys ? await writeKeyInfo(ctx, job.id, a.id, keys.hlsKey) : null;
+  const rungs = ladder(c.width, c.height);
+  for (const r of rungs) await mkdir(path.join(tmp, 'hls', r.name), { recursive: true });
+  const vf = baseFilter(c.hdr, lut);
+  let tail = '';
+  try {
+    // Encode: 10% → 90% of the job's progress bar.
+    await scope.step(hdr ? 'Converting HDR and encoding' : 'Encoding', 0.1);
+    const encStart = Date.now();
+    const timeoutMs = Math.max(15 * 60_000, c.durationS * 1000 * (hdr ? 8 : 4));
+    let lastOut = 0;
+    await run(ctx.cfg.FFMPEG, hlsArgs({ src, out: tmp, rungs, vf, fps: c.fps, vfr: c.vfr, hasAudio: c.hasAudio, keyInfo: keyInfo?.info }), {
+      timeoutMs,
+      isCancelled: () => scope.isCancelled(),
+      onStderr: (l) => (tail = (tail + l + '\n').slice(-4000)),
+      onStdout: (l) => {
+        const m = /^out_time_us=(\d+)/.exec(l);
+        if (m && c.durationS > 0) {
+          const t = Number(m[1]) / 1e6;
+          if (t > lastOut) {
+            lastOut = t;
+            void scope.progress(0.1 + 0.8 * Math.min(1, t / c.durationS));
+          }
+        }
+      },
+    }).catch((e) => {
+      if (e instanceof ChildFailed && e.code === 'cancelled') throw e;
+      if (e instanceof ChildFailed && e.code === 'exit' && /Invalid data found|could not find codec|Decoder .* not found|moov atom not found/i.test(e.stderrTail)) {
+        throw new Permanent('unsupported_codec', e.message);
+      }
+      throw e;
+    });
+    const encodeS = (Date.now() - encStart) / 1000;
+    await keyInfo?.cleanup();
+    await scope.throwIfCancelled();
+
+    await scope.step('Making poster', 0.92);
+    const posterPng = path.join(tmp, 'poster.png');
+    await run(ctx.cfg.FFMPEG, ['-nostdin', '-hide_banner', '-y', '-threads', '2', '-ss', String(Math.max(0, c.durationS * 0.1)), '-i', src, '-frames:v', '1', '-vf', vf.replace(/,format=yuv420p$/, ''), posterPng], { timeoutMs: 120_000 });
+    const stills = path.join(tmp, 'stills');
+    const img = await mediaworker<{ files: { view: { file: string; width: number; height: number; bytes: number }; thumb: { file: string; width: number; height: number; bytes: number } } }>(
+      ctx.cfg.PYTHON,
+      ['images', '--src', posterPng, '--out', stills],
+      { timeoutMs: 120_000 },
+    );
+    await rename(path.join(stills, 'view.webp'), path.join(tmp, 'poster.webp'));
+    await rename(path.join(stills, 'thumb.webp'), path.join(tmp, 'thumb.webp'));
+    await rm(stills, { recursive: true, force: true });
+    await rm(posterPng, { force: true });
+
+    // ffmpeg leaves data.ts.tmp behind in single_file mode (Milestone 0 spike).
+    for (const r of rungs) await rm(path.join(tmp, 'hls', r.name, 'data.ts.tmp'), { force: true });
+
+    let poster = 'poster.webp';
+    let thumb = 'thumb.webp';
+    if (keys) [poster, thumb] = (await sealAll(tmp, [poster, thumb], keys.fileKey, a.id)) as [string, string];
+    const master = parseMaster(await readFile(path.join(tmp, 'hls', 'master.m3u8'), 'utf8'));
+    const outs: Out[] = [
+      { kind: 'hls_master', file: 'hls/master.m3u8', bytes: (await stat(path.join(tmp, 'hls', 'master.m3u8'))).size },
+      ...(await Promise.all(
+        rungs.map(async (r) => {
+          const m = master.get(r.name);
+          return { kind: 'hls_variant' as const, label: r.name, file: `hls/${r.name}/index.m3u8`, width: m?.width ?? null, height: m?.height ?? r.h, bandwidth: m?.bandwidth ?? null, bytes: await bytesIn(path.join(tmp, 'hls', r.name)) };
+        }),
+      )),
+      // HLS segments are AES-128 encrypted by ffmpeg itself (served as-is); poster and thumb are sealed files.
+      { kind: 'video_poster', file: poster, width: img.files.view.width, height: img.files.view.height, bytes: (await stat(path.join(tmp, poster))).size, encrypted: !!keys },
+      { kind: 'video_thumb', file: thumb, width: img.files.thumb.width, height: img.files.thumb.height, bytes: (await stat(path.join(tmp, thumb))).size, encrypted: !!keys },
+    ];
+    await scope.step('Finishing', 0.97);
+    await publish(ctx, a, tmp, outs, { reviewReason: null });
+    await ctx.db.update(processingRuns).set({ finishedAt: new Date(), ok: true, logTail: tail.slice(-2000) }).where(eq(processingRuns.id, runId));
+    await updateRho(ctx, hdr, encodeS, c.durationS);
+    return 'ok';
+  } catch (e) {
+    await ctx.db
+      .update(processingRuns)
+      .set({ finishedAt: new Date(), ok: false, error: e instanceof Error ? e.message.slice(0, 500) : 'error', logTail: tail.slice(-2000) })
+      .where(eq(processingRuns.id, runId));
+    throw e;
+  } finally {
+    await keyInfo?.cleanup();
+    await rm(tmp, { recursive: true, force: true });
+    await ctx.db.update(jobs).set({ estSeconds: null }).where(eq(jobs.id, job.id));
+  }
+}
+
+/** ρ tracks the real host: an EMA of encode seconds per second of video (scoring excluded). */
+async function updateRho(ctx: Ctx, hdr: boolean, encodeS: number, durationS: number) {
+  const key = hdr ? 'rho_hdr' : 'rho_sdr';
+  const [row] = await ctx.db.select().from(appSettings).where(eq(appSettings.key, key));
+  const current = typeof row?.value === 'number' ? row.value : hdr ? DEFAULT_RHO.hdr : DEFAULT_RHO.sdr;
+  const value = Math.round(nextRho(current, encodeS, durationS) * 1000) / 1000;
+  await ctx.db.insert(appSettings).values({ key, value }).onConflictDoUpdate({ target: appSettings.key, set: { value } });
+}

@@ -1,0 +1,1165 @@
+---
+title: "QU ACM Media Library: build and deploy plan"
+summary: "Backend, processing worker, encryption and the Darkroom Archive UI, deployed to the chapter's cPanel account at qu.hosting.acm.org."
+status: draft
+---
+
+# QU ACM Media Library: build and deploy plan
+
+**Objective.** Ship a private, login-only library for the chapter's event photos and videos. Members sign in with an emailed code, browse events, view fast WebP copies, stream videos at 360p / 720p / 1080p and download originals. Core members also see core-tier content (encrypted at rest), upload after events and manage events. Admins manage members, the processing queue, tone-curve overrides and storage. Everything runs on the single shared cPanel account `quhosting@qu.hosting.acm.org`.
+
+**Sources.** The backend contract is `handoff-backend.md`, which is treated as requirements wherever it says *Decided*. The UI is the **Darkroom Archive** design on the Claude Design canvas *QU ACM Media Library* (30 artboards: desktop browse, upload and admin screens; phone screens in English and Arabic; system states; design system v1), with screen requirements from `handoff-design.md`. The design already exists, so the UI is built straight from it instead of from the interim UI the backend handoff describes. The handoff's layering rule still applies: pages never call `fetch` themselves.
+
+**Done means:**
+- Every screen group in the design runs against the real API, on phone and desktop, in light and dark themes. The Arabic boards follow the Arabic decision in Open Questions.
+- A real event flows through the system: upload 80 photos and 3 videos from a phone, close the tab, resume, wait for processing, then watch as a member. HLG iPhone footage is tone-mapped to SDR.
+- Core-tier files are encrypted on disk and still stream and download with HTTP Range.
+- The app is live on the production subdomain, with a cron-driven worker, nightly backups and docs (`docs/HANDOFF.md`, `docs/ops.md`, `docs/security.md`, `CLAUDE.md`).
+- All Vitest and pytest suites pass, plus a scripted smoke test against production.
+
+The decisions taken so far are listed at the bottom, and the two still open are in **Open Questions**.
+
+### One event, end to end
+
+The day after the chapter's hackathon, a core member opens **Upload** on their phone over campus Wi-Fi. They create "Hackathon, day 1", select 80 photos and 3 iPhone videos, and the files start uploading in resumable 8 MiB chunks. They lock the phone; when they come back, a banner says "Resume 3 unfinished uploads", they pick the same files, and the uploads continue from where they stopped. The done screen says photos will be ready in a few seconds and videos in about 44 minutes. That estimate is possible because ingest already probed each video: 34 minutes of HLG footage at about 1.2× processing time, plus a minute of setup per video. Photos are ready in seconds because image jobs always run ahead of video jobs.
+
+Behind that, each finished upload becomes an `assets` row plus a `jobs` row. A cron-started worker takes one job at a time:
+- Pillow writes `view.webp` and `thumb.webp`.
+- ffmpeg decodes each video once, tone-maps it, and writes a three-rung HLS ladder in single-file mode.
+- Core-tier outputs are sealed with per-asset keys.
+
+That evening a member opens the event on a laptop. They see only member-tier, ready items, and event counts include only what they can see. The video starts on Auto at 720p and switches to 1080p when they pick it, with every byte served through `/api/media/*` after a permission check.
+
+## What the server actually has (measured over SSH, 29 Oct 2026)
+
+I ran read-only probes as `quhosting` on `server.hosting3.acm.org`. Most of the handoff holds; the differences below change the plan.
+
+<Table
+  id="server-facts"
+  columns={["Item", "Handoff says", "Measured", "Plan consequence"]}
+  rows={[
+    ["Node", "alt-nodejs up to 24", "/opt/alt/alt-nodejs24 present; csewiki already runs a Passenger app on Node 20 via ~/nodevenv", "Setup Node.js App → Node 24; copy csewiki's .htaccess Passenger pattern"],
+    ["Python", "3.13 available", "/opt/alt/python313/bin/python3.13 (not on PATH)", "Worker venv: /opt/alt/python313/bin/python3.13 -m venv ~/venvs/worker"],
+    ["PostgreSQL", "PostgreSQL available, 2 DBs exist", "cPanel-managed cluster on /var/run/postgresql (5432) with quhosting_acmo_raft and quhosting_csewiki; only /usr/pgsql-9.6 client tools visible; no contrib extensions visible; names are prefixed quhosting_", "Use the cPanel cluster. Write the schema against PostgreSQL 9.6 features (see the decision below); a Milestone 0 spike confirms the server version"],
+    ["ffmpeg", "~/bin static 7.0.2", "~/bin/ffmpeg and ffprobe present (chmod 700)", "FFMPEG=/home/quhosting/bin/ffmpeg"],
+    ["flock", "Verify path", "/usr/bin/flock", "Cron line uses /usr/bin/flock -n"],
+    ["Cron", "—", "crontab is empty", "Five new entries; nothing to merge"],
+    ["CPU / threads", "≈4 cores, 200 procs incl. threads", "nproc reports 64 and free reports a 128 GB host, so the tools see the host instead of the account limit", "Explicit thread caps everywhere (the handoff's §8.7 is load-bearing)"],
+    ["Inodes", "Limit unknown, 27,279 used", "cPanel quota: inode_limit 0 (unlimited at cPanel level), 27,280 used, 2.05 GB used", "Still budget files: bundle the API so node_modules on the server stays small; record venv inode cost"],
+    ["Domains", "Open: e.g. library.qu.acm.org", "qu.acm.org DNS is on a2dns.com nameservers, so cPanel manages it; existing subdomains test, csewiki, better-schedule", "Create library.qu.acm.org in cPanel → Domains; AutoSSL issues the certificate"],
+    ["Fixtures", "IMG_4515.MOV, T_* clips", "Already in ~ (IMG_4515.MOV 33 MB, T_hable/mobius/reinhard_100/203.mp4)", "Copy into the repo test fixtures (Git LFS not needed at these sizes)"],
+    ["Mail", "cPanel SMTP", "Mail is configured for qu.acm.org (~/etc/qu.acm.org)", "Create noreply@qu.acm.org; send through localhost:587 with STARTTLS"],
+  ]}
+/>
+
+<Callout id="pg96-decision" tone="decision">
+
+**Database: the cPanel-managed cluster, with a schema limited to PostgreSQL 9.6 features.** The visible client tools are 9.6, and a cPanel account can't run `CREATE EXTENSION`, so the schema avoids anything newer or extension-based:
+- **Statuses and roles:** `text` columns with `CHECK` constraints instead of enums. Adding an enum value can't run inside a migration transaction before PG 12, and drizzle-kit wraps each migration in one.
+- **Ids:** UUID v7 generated in the app (`uuidv7` npm). No `gen_random_uuid()` or `pgcrypto`.
+- **Emails:** `email text UNIQUE` plus `CHECK (email = lower(email))`. The app lower-cases emails on the way in. A plain unique column is used instead of an expression index because `ON CONFLICT (email) DO NOTHING` (bulk add) can't target an expression index. No `citext`.
+- **Search:** an expression GIN index on `to_tsvector('simple', title || ' ' || coalesce(description,''))`, built into core since 8.3, plus `ILIKE` prefix matching for short queries. No `pg_trgm` and no generated columns.
+- **Auto-increment:** `bigserial` instead of identity columns.
+- **Job claim:** `FOR UPDATE SKIP LOCKED` (available since 9.5).
+
+This is a strict subset of modern Postgres, so the same migrations run on a newer cluster unchanged. Local development and CI use a `postgres:9.6` container, so what passes locally passes in production.
+
+**Tooling rules that follow from 9.6:**
+- Only `drizzle-kit generate` is allowed. `push`, `pull`, `check` and `studio` read catalog columns added in PG 10–12 and fail against the server.
+- Migrations run through a small bundled script using `drizzle-orm/node-postgres/migrator`, so production doesn't need drizzle-kit.
+- **Banned:** identity and `GENERATED` columns, `INCLUDE` indexes, `websearch_to_tsquery` (use `plainto_tsquery`), `jsonb_path_*`, `gen_random_uuid`, procedures, and declarative partitioning.
+- Auth is md5 (9.6 has no SCRAM), which node-postgres supports.
+- At boot, the API refuses to start unless `server_version_num` is at least 90500 (9.5), which `SKIP LOCKED` and `ON CONFLICT` need.
+
+
+
+</Callout>
+
+<Callout id="pg96-risk" tone="risk">
+
+PostgreSQL 9.6 has been end-of-life since November 2021 and gets no security fixes. The exposure is limited: the database listens only on the local socket or loopback, the app connects with a password over the cPanel-managed `pg_hba`, and nothing outside the host can reach it. `docs/ops.md` records this so the chapter can ask ACM HQ about an upgrade. No code change is needed when that happens.
+
+</Callout>
+
+## High-level design
+
+### System context
+
+Everything except the users' browsers and their mail servers runs inside one CageFS account. Only Apache faces the internet. The API is the only process that reads media bytes for users, and the worker is the only process that writes renditions.
+
+<Diagram id="hld-context" frame="show" caption="System context. Solid boxes run inside the quhosting CageFS account; arrows name the protocol.">
+
+```html
+<div class="ctx">
+  <section class="diagram-panel clients" data-rough>
+    <p class="cap diagram-muted">Browsers</p>
+    <div class="diagram-node">Member<br><small>phone · laptop</small></div>
+    <div class="diagram-node">Core<br><small>uploads from phones at events</small></div>
+    <div class="diagram-node">Admin<br><small>desktop</small></div>
+    <div class="diagram-node mail">Inboxes<br><small>@qu.acm.org · QU student mail</small></div>
+  </section>
+
+  <div class="wire">
+    <span class="diagram-pill">HTTPS, same origin</span>
+    <span class="diagram-pill">cookie sid + X-Requested-With</span>
+    <span class="diagram-pill">tus PATCH 8 MiB</span>
+    <span class="diagram-pill">HLS byte ranges</span>
+    <span class="diagram-pill">poll every 5 s</span>
+  </div>
+
+  <section class="diagram-panel host" data-rough>
+    <p class="cap diagram-muted">server.hosting3.acm.org · cPanel · CloudLinux CageFS · about 4 cores · 4 GB · 200 processes including threads</p>
+    <div class="grid">
+      <div class="diagram-box edge">Apache + Passenger<br><small>library.qu.acm.org · AutoSSL</small></div>
+      <div class="arrow">→ spawns</div>
+      <div class="diagram-box api">Node 24 · Fastify API<br><small>SPA static · /api/* · /api/uploads (tus) · /api/media/*</small></div>
+
+      <div class="diagram-box db">PostgreSQL (cPanel)<br><small>quhosting_library · local socket</small></div>
+      <div class="diagram-box fs">~/media<br><small>tus/ · assets/ab/&lt;id&gt;/ · tmp/</small></div>
+      <div class="diagram-box smtp">Exim SMTP<br><small>noreply@qu.acm.org</small></div>
+
+      <div class="diagram-box cron">cron · every minute<br><small>/usr/bin/flock -n worker.lock</small></div>
+      <div class="arrow">→ starts</div>
+      <div class="diagram-box worker">Worker (Node)<br><small>claims one job · exits after 50 min</small></div>
+
+      <div class="diagram-box tool">~/bin/ffmpeg 7.0.2<br><small>nice 19 · -threads 2</small></div>
+      <div class="diagram-box tool">~/venvs/worker (Py 3.13)<br><small>Pillow · pillow-heif · pyiqa · torch CPU</small></div>
+      <div class="diagram-box keys">~/keys (700)<br><small>transient HLS key files</small></div>
+    </div>
+    <ul class="legend diagram-muted">
+      <li>API ↔ DB, worker ↔ DB: SQL (pg pool of 5 / 2)</li>
+      <li>API → ~/media: read and stream; tus writes staging; finish hook moves the original</li>
+      <li>Worker → ffmpeg, Python: spawn, JSON on stdout, progress on a pipe</li>
+      <li>API → SMTP → inboxes: OTP mail</li>
+    </ul>
+  </section>
+</div>
+```
+
+```css
+.ctx { display: grid; grid-template-columns: minmax(150px, 1fr) auto minmax(0, 3.2fr); gap: 16px; align-items: stretch; }
+.clients { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.clients .mail { margin-top: auto; }
+.cap { margin: 0 0 8px; font-size: 12px; }
+.wire { display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+.host { padding: 14px; }
+.grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
+.grid > .db, .grid > .fs, .grid > .smtp, .grid > .tool, .grid > .keys { grid-column: auto; }
+.grid { grid-template-areas: "edge a1 api" "db fs smtp" "cron a2 worker" "t1 t2 keys"; grid-template-columns: 1fr 1fr 1fr; }
+.edge { grid-area: edge; } .api { grid-area: api; border-color: var(--wf-accent); }
+.grid > .arrow:nth-of-type(1) { grid-area: a1; }
+.db { grid-area: db; } .fs { grid-area: fs; } .smtp { grid-area: smtp; }
+.cron { grid-area: cron; } .worker { grid-area: worker; border-color: var(--wf-accent); }
+.grid > .arrow:nth-of-type(2) { grid-area: a2; }
+.grid > .tool:nth-of-type(1) { grid-area: t1; }
+.arrow { text-align: center; color: var(--wf-muted); font-size: 13px; }
+.diagram-box small, .diagram-node small { color: var(--wf-muted); font-size: 12px; }
+.legend { margin: 12px 0 0; padding-left: 18px; font-size: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 16px; }
+@media (max-width: 760px) { .ctx { grid-template-columns: 1fr; } .grid { grid-template-areas: none; grid-template-columns: 1fr; } .grid > * { grid-area: auto !important; } .legend { grid-template-columns: 1fr; } }
+```
+
+</Diagram>
+
+**Why this shape.** The host limits drive it. Passenger owns the HTTP process, so the API can't also run long background work: Passenger may recycle it, and CPU spent there counts against the same 4 cores. That's why processing runs in a separate cron-started worker under `flock`. The host allows 150 entry processes, and polling every 5 seconds is enough for live status, so there is no SSE or WebSocket in v1. Media never sits in a public directory: Apache serves only the built SPA via Passenger, and every media byte goes through `canView`.
+
+### Host topology: directories, processes and cron
+
+<Diagram id="hld-topology" frame="show" caption="What lives where on the account. Releases are immutable directories; `current` is a symlink that a deploy flips.">
+
+```html
+<div class="topo">
+  <section class="diagram-panel" data-rough>
+    <p class="h">Code (deployed)</p>
+    <div class="diagram-box"><b>~/apps/acm-media/releases/&lt;git-sha&gt;/</b><small>api/dist/main.js (one esbuild bundle) · api/app.cjs · web/dist/ · worker/dist/run.js · py/ · luts/*.cube · migrations/ · node_modules/ (sodium-native, pg only)</small></div>
+    <div class="diagram-box"><b>~/apps/acm-media/current</b> → releases/&lt;sha&gt;<small>Passenger app root; deploy = rsync new release, migrate, flip symlink, touch tmp/restart.txt</small></div>
+    <div class="diagram-box"><b>~/apps/acm-media/shared/.env</b> (600)<small>DATABASE_URL · MASTER_KEY · OTP_PEPPER · SMTP_* · MEDIA_ROOT · KEYS_DIR · FFMPEG · FFPROBE · PYTHON · PUBLIC_ORIGIN</small></div>
+    <div class="diagram-box"><b>~/library.qu.acm.org/.htaccess</b><small>Passenger block: AppRoot = current, Nodejs = ~/nodevenv/…/24/bin/node, StartupFile = api/app.cjs</small></div>
+  </section>
+
+  <section class="diagram-panel" data-rough>
+    <p class="h">Data (never inside a release)</p>
+    <div class="diagram-box"><b>~/media/</b><small>tus/ staging · assets/ab/&lt;asset_id&gt;/ originals and renditions · tmp/&lt;job_id&gt;/ scratch</small></div>
+    <div class="diagram-box"><b>~/keys/</b> (700)<small>&lt;job&gt;.keyinfo + key, deleted when ffmpeg exits</small></div>
+    <div class="diagram-box"><b>PostgreSQL quhosting_library</b><small>role quhosting_library_app · cPanel → PostgreSQL Databases</small></div>
+    <div class="diagram-box"><b>~/backups/</b><small>pg_dump -Fc nightly, 14 kept</small></div>
+    <div class="diagram-box"><b>~/logs/</b><small>api.log · worker.log · cron.log, size-rotated</small></div>
+  </section>
+
+  <section class="diagram-panel" data-rough>
+    <p class="h">Processes</p>
+    <div class="diagram-node">Passenger → node (pinned to 1 process)<small>SPA + API; restarts on touch; UV_THREADPOOL_SIZE=4</small></div>
+    <div class="diagram-node">worker (0 or 1)<small>flock guarantees at most one</small></div>
+    <div class="diagram-node">ffmpeg / python children<small>nice 19, killed on timeout</small></div>
+    <p class="h">crontab</p>
+    <ul class="cron">
+      <li><code>* * * * *</code> worker</li>
+      <li><code>7 * * * *</code> cleanup: tus older than 48 h, OTPs, sessions, log rotation</li>
+      <li><code>23 3 * * *</code> storage-stats into app_settings</li>
+      <li><code>41 3 * * *</code> pg_dump backup</li>
+      <li><code>*/10 * * * *</code> health: curl /api/health, mail an admin after 3 failures</li>
+    </ul>
+  </section>
+</div>
+```
+
+```css
+.topo { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.topo section { padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.h { margin: 4px 0 2px; font-weight: 600; }
+.topo small { display: block; color: var(--wf-muted); font-size: 12px; margin-top: 2px; }
+.cron { margin: 0; padding-left: 16px; font-size: 13px; display: grid; gap: 4px; }
+@media (max-width: 900px) { .topo { grid-template-columns: 1fr; } }
+```
+
+</Diagram>
+
+<Callout id="deploy-decision" tone="decision">
+
+**Recommended (needs your call, see Open Questions): build on the laptop and ship artifacts with rsync.** The handoff's §13 says to build on the server; this plan recommends the reverse.
+- The API, worker and migrator are each bundled with esbuild into a single file, with only `pg` and `sodium-native` left external.
+- The build emits a **generated minimal `package.json` and lockfile** with just those two dependencies, so the server's `node_modules` holds a few hundred files. Installing the whole workspace would pull in React, hls.js and Uppy, about 30,000 files.
+- A build on the laptop can't fight live traffic for CPU, threads or the 4 GB of memory.
+
+`scripts/deploy.sh`:
+1. `npm run build`.
+2. `rsync` to `releases/<sha>`.
+3. `npm ci` of the minimal manifest, run in the cPanel Node 24 venv so `sodium-native` picks its linux-x64 prebuild.
+4. `node migrate.js` (bundled migrator).
+5. Flip the `current` symlink, then `touch tmp/restart.txt`.
+6. `curl /api/health` until the new release's sha appears.
+
+Migrations are **additive only** (expand, then contract in a later release), because they run while the old code is still serving and rollback only re-points the symlink. Passenger is pinned to **one application process**: tus's default locker and the rate-limit counters are in memory. Which directive CloudLinux allows in `.htaccess` (`PassengerMaxInstances 1` or the app-level pool setting) is checked in Milestone 0. Running more processes later would need a Postgres advisory-lock tus locker and a Postgres-backed rate-limit store.
+
+</Callout>
+
+### Code modules and dependency direction
+
+<Diagram id="hld-modules" frame="show" caption="Workspace layers. Arrows point from a dependent to what it imports; nothing imports upward.">
+
+```html
+<div class="mods">
+  <section class="diagram-panel web" data-rough>
+    <p class="h">apps/web · Vite + React 18</p>
+    <div class="stack">
+      <div class="diagram-box">routes/ <small>React Router; one file per screen; guards by role</small></div>
+      <div class="diagram-box">screens/ <small>presentational, from the Darkroom Archive artboards</small></div>
+      <div class="diagram-box">ui/ <small>Button · Chip · StatusChip · TierMarker · MediaTile · JustifiedGrid · Lightbox · Player · OtpInput · DataTable · Tabs · Confirm · Toast · Banner · Skeleton</small></div>
+      <div class="diagram-box">data/ <small>TanStack Query hooks (useEvents, useAssetStatus…); polling rules</small></div>
+      <div class="diagram-box">api/ <small>typed client: one function per endpoint; the only place fetch is called</small></div>
+      <div class="diagram-box">styles/tokens.css <small>Darkroom Archive tokens, light and dark, RTL-safe</small></div>
+    </div>
+  </section>
+
+  <div class="mid">
+    <section class="diagram-panel api" data-rough>
+      <p class="h">apps/api · Fastify</p>
+      <div class="row">
+        <span class="diagram-pill">routes/</span><span class="diagram-pill">auth/</span><span class="diagram-pill">media/</span><span class="diagram-pill">uploads/</span><span class="diagram-pill">admin/</span>
+      </div>
+      <div class="row">
+        <span class="diagram-pill">policy/canView</span><span class="diagram-pill">crypto/</span><span class="diagram-pill">db/</span><span class="diagram-pill">mail/</span><span class="diagram-pill">config.ts</span>
+      </div>
+    </section>
+    <section class="diagram-panel worker" data-rough>
+      <p class="h">apps/worker · Node</p>
+      <div class="row">
+        <span class="diagram-pill">run.ts</span><span class="diagram-pill">jobs/image</span><span class="diagram-pill">jobs/video</span><span class="diagram-pill">jobs/retier</span><span class="diagram-pill">jobs/purge</span><span class="diagram-pill">ffmpeg.ts</span><span class="diagram-pill">eta.ts</span><span class="diagram-pill">settings.ts</span>
+      </div>
+    </section>
+    <section class="diagram-panel py" data-rough>
+      <p class="h">py/mediaworker · Python 3.13</p>
+      <div class="row">
+        <span class="diagram-pill">images.py</span><span class="diagram-pill">tonemap/luts.py</span><span class="diagram-pill">tonemap/select.py</span><span class="diagram-pill">tonemap/pu21.py</span><span class="diagram-pill">probe.py</span>
+      </div>
+      <p class="diagram-muted note">called by the worker only, through spawn; JSON on stdout</p>
+    </section>
+  </div>
+
+  <section class="diagram-panel shared" data-rough>
+    <p class="h">packages/core</p>
+    <div class="stack">
+      <div class="diagram-box">schemas/ <small>zod for every request and response; inferred TS types</small></div>
+      <div class="diagram-box">db/schema.ts <small>Drizzle tables, shared by api and worker</small></div>
+      <div class="diagram-box">crypto/aeadFile.ts <small>ACMENC01 seal and open, Range math</small></div>
+      <div class="diagram-box">eta.ts · status.ts <small>pure functions used by api and worker</small></div>
+    </div>
+    <p class="diagram-muted note">web imports only schemas/ (enforced by an eslint boundary rule)</p>
+  </section>
+</div>
+<p class="arrows diagram-muted">web/api → core/schemas &nbsp;·&nbsp; api → core/db, core/crypto &nbsp;·&nbsp; worker → core/db, core/crypto, core/eta &nbsp;·&nbsp; worker → py (spawn)</p>
+```
+
+```css
+.mods { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.mods section { padding: 14px; }
+.mid { display: grid; gap: 14px; }
+.stack { display: grid; gap: 6px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.h { margin: 0 0 8px; font-weight: 600; }
+.mods small { display: block; color: var(--wf-muted); font-size: 12px; }
+.note { font-size: 12px; margin: 8px 0 0; }
+.api, .worker { border-color: var(--wf-accent); }
+.arrows { font-size: 12px; text-align: center; margin: 10px 0 0; }
+@media (max-width: 900px) { .mods { grid-template-columns: 1fr; } }
+```
+
+</Diagram>
+
+The handoff calls the shared package `packages/shared`; it becomes `packages/core` because it also holds the Drizzle schema and the encrypted-file format, which the API and worker both need. The web app can import only its `schemas/` folder, enforced by an ESLint boundary rule, so server code never ends up in the browser bundle.
+
+### Request paths at a glance
+
+<Diagram id="hld-paths" frame="show" caption="The five traffic classes, what guards each one, and where its bytes come from.">
+
+```html
+<table class="paths">
+  <thead><tr><th>Path</th><th>Guard</th><th>Handler</th><th>Bytes from</th><th>Host-limit note</th></tr></thead>
+  <tbody>
+    <tr><td><b>Sign-in</b><br><small>/api/auth/*</small></td><td>rate limit by email + IP</td><td>auth/otp.ts · sessions.ts</td><td>Postgres · SMTP</td><td>constant-time response for unknown emails</td></tr>
+    <tr><td><b>Browse</b><br><small>/api/events, /api/assets</small></td><td>requireUser + per-viewer SQL filter</td><td>routes/events.ts · assets.ts</td><td>Postgres</td><td>cursor pages ≤ 100</td></tr>
+    <tr><td><b>Media</b><br><small>/api/media/:id/*</small></td><td>canView → 404</td><td>media/serve.ts</td><td>~/media (plain via sendFile, .enc via decrypt stream)</td><td>Range required; immutable cache for thumbs</td></tr>
+    <tr><td><b>Upload</b><br><small>/api/uploads/*</small></td><td>requireCore + event and tier check in onIncomingRequest</td><td>@tus/server · onUploadFinish</td><td>~/media/tus → assets/</td><td>8 MiB chunks (5 MiB fallback)</td></tr>
+    <tr><td><b>Status</b><br><small>/api/uploads/mine, /api/admin/jobs</small></td><td>requireCore / requireAdmin</td><td>routes/uploads.ts · admin/jobs.ts</td><td>Postgres (jobs + eta)</td><td>polled every 5 s only while something is unfinished</td></tr>
+  </tbody>
+</table>
+```
+
+```css
+.paths { width: 100%; border-collapse: collapse; font-size: 13px; }
+.paths th, .paths td { border: 1px solid var(--wf-line); padding: 8px 10px; text-align: left; vertical-align: top; }
+.paths th { color: var(--wf-muted); font-weight: 600; }
+.paths small { color: var(--wf-muted); }
+```
+
+</Diagram>
+
+**Client IPs and rate limits behind the proxy.** Apache hands every request to Passenger from loopback, so Fastify runs with `trustProxy: '127.0.0.1'` and reads the client address from `X-Forwarded-For`. Without that, every per-IP limit would apply to the whole site, and `sessions.ip` would always be 127.0.0.1. Limits per client IP:
+- **Auth:** the handoff's numbers. request-code 3 per 15 minutes per email and 10 per hour per IP; verify 20 per 15 minutes per IP.
+- **Global:** 600 requests per minute for `/api/*`, which absorbs a whole campus room behind one NAT address.
+- **Exempt from the global limit:** `/api/media/*` and `/api/uploads/*`. HLS byte ranges and 8 MiB PATCHes would otherwise use it up, and both routes are already authenticated.
+
+## Low-level design
+
+### Data model
+
+The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK` instead of enums, a lower-cased unique `email` instead of `citext`, and ids from the app. Every table keeps the handoff's `created_at`, and events and assets keep `updated_at` too (omitted from the cards below for space). There are four additions:
+- `assets.duplicate_of` lets the upload UI warn about re-uploads.
+- `assets.rendition_rev` drives cache busting.
+- `jobs.priority` backs both kind-based ordering and "Move to the top".
+- `jobs.outcome` records a job that finished by sending its asset to review.
+
+<DataModel
+  id="data-model"
+  entities={[
+    { id: "users", name: "users", fields: [
+      { name: "id", type: "uuid (v7, app)", pk: true },
+      { name: "email", type: "text unique · check (email = lower(email))" },
+      { name: "name", type: "text" },
+      { name: "role", type: "text check member|core" },
+      { name: "is_admin", type: "bool · check (not is_admin or role='core')" },
+      { name: "status", type: "text check active|disabled" },
+      { name: "created_by", type: "uuid", fk: "users.id", nullable: true },
+      { name: "created_at", type: "timestamptz" },
+      { name: "last_login_at", type: "timestamptz", nullable: true }
+    ]},
+    { id: "otp_codes", name: "otp_codes", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "email", type: "text (lower)" },
+      { name: "code_hash", type: "bytea · HMAC(pepper, email:code)" },
+      { name: "expires_at", type: "timestamptz (+10 min)" },
+      { name: "attempts", type: "int" },
+      { name: "consumed_at", type: "timestamptz", nullable: true },
+      { name: "request_ip", type: "inet", nullable: true }
+    ]},
+    { id: "sessions", name: "sessions", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "token_hash", type: "bytea unique · sha256(token)" },
+      { name: "user_id", type: "uuid", fk: "users.id" },
+      { name: "expires_at", type: "timestamptz (30 d sliding)" },
+      { name: "last_seen_at", type: "timestamptz" },
+      { name: "ip", type: "inet", nullable: true },
+      { name: "user_agent", type: "text", nullable: true }
+    ]},
+    { id: "events", name: "events", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "title", type: "text" },
+      { name: "slug", type: "text unique" },
+      { name: "starts_on", type: "date" },
+      { name: "ends_on", type: "date", nullable: true },
+      { name: "location", type: "text", nullable: true },
+      { name: "description", type: "text", nullable: true },
+      { name: "cover_asset_id", type: "uuid (on delete set null)", fk: "assets.id", nullable: true },
+      { name: "default_tier", type: "text check member|core" },
+      { name: "created_by", type: "uuid", fk: "users.id" },
+      { name: "deleted_at", type: "timestamptz", nullable: true }
+    ]},
+    { id: "assets", name: "assets", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "event_id", type: "uuid", fk: "events.id" },
+      { name: "kind", type: "text check image|video" },
+      { name: "tier", type: "text check member|core" },
+      { name: "status", type: "text check uploading|queued|processing|ready|failed|needs_review|original_only|deleting" },
+      { name: "original_filename / mime / size / ext", type: "text · bigint" },
+      { name: "original_sha256", type: "bytea" },
+      { name: "duplicate_of", type: "uuid (on delete set null)", fk: "assets.id", nullable: true },
+      { name: "encrypted", type: "bool" },
+      { name: "rendition_rev", type: "int (bumped when outputs swap)" },
+      { name: "captured_at · width · height · duration_s · fps · device", type: "mixed", nullable: true },
+      { name: "hdr", type: "text check sdr|hlg|pq|unknown", nullable: true },
+      { name: "source_info", type: "jsonb" },
+      { name: "uploader_id", type: "uuid", fk: "users.id" },
+      { name: "upload_id", type: "text unique (tus id)" },
+      { name: "deleted_at", type: "timestamptz", nullable: true }
+    ]},
+    { id: "renditions", name: "renditions", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "asset_id", type: "uuid", fk: "assets.id" },
+      { name: "kind", type: "text check image_view|image_thumb|image_jpeg|video_poster|hls_master|hls_variant" },
+      { name: "label", type: "text (360p|720p|1080p)", nullable: true },
+      { name: "width · height · bandwidth · bytes", type: "int · bigint" },
+      { name: "rel_path", type: "text" },
+      { name: "settings_version", type: "int" }
+    ]},
+    { id: "processing_runs", name: "processing_runs", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "asset_id", type: "uuid", fk: "assets.id" },
+      { name: "settings_version", type: "int" },
+      { name: "tone_curve", type: "text", nullable: true },
+      { name: "curve_source", type: "text check auto|fallback|override|none" },
+      { name: "scores", type: "jsonb · candidates[] + frames[]", nullable: true },
+      { name: "started_at · finished_at · ok · error · log_tail", type: "mixed" }
+    ]},
+    { id: "jobs", name: "jobs", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "asset_id", type: "uuid (on delete set null)", fk: "assets.id", nullable: true },
+      { name: "kind", type: "text check process|reprocess|retier|purge" },
+      { name: "state", type: "text check queued|running|done|failed|cancelled" },
+      { name: "outcome", type: "text check ok|needs_review", nullable: true },
+      { name: "params", type: "jsonb" },
+      { name: "priority", type: "int (image/retier/purge 100, video 0; Move to top = max+1)" },
+      { name: "attempts / max_attempts", type: "int" },
+      { name: "run_after", type: "timestamptz" },
+      { name: "step · progress · est_seconds", type: "text · real · int" },
+      { name: "last_error", type: "text", nullable: true }
+    ]},
+    { id: "asset_keys", name: "asset_keys", fields: [
+      { name: "asset_id", type: "uuid", pk: true, fk: "assets.id" },
+      { name: "file_key_wrapped", type: "bytea · secretbox(MASTER_KEY)" },
+      { name: "hls_key_wrapped", type: "bytea", nullable: true }
+    ]},
+    { id: "audit_log", name: "audit_log", fields: [
+      { name: "id", type: "bigserial", pk: true },
+      { name: "actor_id", type: "uuid", fk: "users.id", nullable: true },
+      { name: "action", type: "text" },
+      { name: "target_type · target_id", type: "text · uuid" },
+      { name: "data", type: "jsonb" },
+      { name: "at", type: "timestamptz" }
+    ]},
+    { id: "app_settings", name: "app_settings", fields: [
+      { name: "key", type: "text", pk: true },
+      { name: "value", type: "jsonb · settings_version, inode_limit, tonemap_auto, rho_sdr, rho_hdr, storage_stats" }
+    ]}
+  ]}
+  relations={[
+    { from: "sessions", to: "users", kind: "n-1" },
+    { from: "events", to: "users", kind: "n-1" },
+    { from: "assets", to: "events", kind: "n-1" },
+    { from: "assets", to: "users", kind: "n-1" },
+    { from: "renditions", to: "assets", kind: "n-1" },
+    { from: "processing_runs", to: "assets", kind: "n-1" },
+    { from: "jobs", to: "assets", kind: "n-1" },
+    { from: "asset_keys", to: "assets", kind: "1-1" },
+    { from: "audit_log", to: "users", kind: "n-1" }
+  ]}
+/>
+
+Indexes that matter for the hot paths:
+- `assets (event_id, tier, status) WHERE deleted_at IS NULL` serves event grids.
+- `assets (event_id, original_sha256)` serves duplicate detection.
+- `jobs (state, priority DESC, created_at)` serves the job claim.
+- `otp_codes (email, created_at DESC)` serves verification.
+- `events` gets a GIN index on the FTS expression for search, and `(starts_on DESC, id)` for cursor pagination.
+- Event grids sort by `coalesce(captured_at, created_at), id`, with a matching expression index. That key doubles as the cursor, because `captured_at` is often missing.
+
+Delete behaviour and per-viewer fields:
+- **Foreign keys.** `events.cover_asset_id`, `assets.duplicate_of` and `jobs.asset_id` are `ON DELETE SET NULL`, so a purge job can delete its asset row without cascading into its own job row. `renditions`, `processing_runs` and `asset_keys` cascade.
+- **Event covers.** A cover is resolved per viewer. If the chosen cover isn't visible to this viewer (core tier, or unfinished), the first visible photo is used instead.
+- **Core-content marker.** `GET /events` returns `hasCoreContent` only to core viewers, for the design's core-only marker.
+
+
+
+### Who can see what: `canView`
+
+Every media route, asset read and HLS key request goes through one pure function, `access(viewer, asset)`. It returns a level, and each route declares the minimum level it needs:
+- `/media/:id/original` needs at least `download`.
+- Thumbnails, view copies, posters, HLS and the key need `full`.
+- Lists and `/assets/:id` need at least `status`.
+
+Anything below the route's minimum is **404**, never 403. The design repeats this rule: members never learn that core items exist.
+
+<Table
+  id="canview-matrix"
+  columns={["Asset state", "Member", "Core (not uploader)", "Core uploader", "Admin"]}
+  rows={[
+    ["member tier · ready", "view", "view", "view", "view"],
+    ["core tier · ready", "404", "view", "view", "view"],
+    ["original_only, member tier (core tier: members 404)", "listed as an Original-only tile · download only", "same", "same", "same"],
+    ["uploading / queued / processing / failed / needs_review", "404 (omitted)", "404 (omitted)", "status tile, no bytes", "status tile, no bytes"],
+    ["ready, with a re-process or retier job running", "view (old outputs until the swap)", "view", "view + processing badge", "view + processing badge"],
+    ["deleting or soft-deleted, or event deleted", "404", "404", "404", "404"],
+    ["any, user disabled or no session", "401 (no session survives disabling)", "401", "401", "401"],
+  ]}
+/>
+
+The test suite enumerates every role × tier × status × deleted combination (4 × 2 × 8 × 2 = 128 cases) against this table, as the handoff's security checklist requires.
+
+### Asset lifecycle
+
+<Mermaid
+  id="asset-states"
+  caption="Asset status transitions. Every arrow out of processing is written by the worker; every admin arrow writes an audit_log row."
+  source={`stateDiagram-v2
+  [*] --> uploading: tus POST · onUploadCreate inserts the row
+  uploading --> queued: onUploadFinish · magic bytes OK · quick probe · process job
+  uploading --> [*]: wrong type, or abandoned 48 h · row and tus files deleted
+  queued --> processing: worker claims first-time process job
+  processing --> ready: outputs renamed into place
+  processing --> needs_review: Log / unknown transfer · true-HDR still
+  processing --> queued: transient error · attempts < 3 · backoff
+  processing --> failed: attempts = 3, or cancelled
+  failed --> queued: Retry (uploader or admin) · attempts reset
+  needs_review --> queued: Process anyway (admin)
+  needs_review --> original_only: Keep original only (admin)
+  ready --> ready: re-process · curve override · tier change (job runs beside it, outputs swap atomically)
+  ready --> deleting: Delete (admin)
+  failed --> deleting
+  needs_review --> deleting
+  original_only --> deleting
+  deleting --> [*]: purge job removes files + rows`}
+/>
+
+- **Upload rows exist from the start.** `onUploadCreate` inserts the `uploading` row, keyed by the tus id in `assets.upload_id`, so My uploads and the "Resume N unfinished uploads" banner come from the server instead of one browser's localStorage. The hourly cleanup deletes `uploading` rows and their tus files after 48 hours.
+- **Ready items stay ready during re-processing.** Re-processing, a curve override or a tier change never takes a ready item offline. The job writes into a fresh output directory (`r{rev}/` under the asset directory), then swaps the rendition rows and bumps `rendition_rev` in one transaction, then deletes the old directory. Viewers keep playing the old outputs until the swap. Core members and admins see a "processing" badge, derived from the job, while it runs.
+- **Tier changes take effect at once.** A member → core change hides the item from members immediately, because `access()` reads the tier, not the files.
+- **What "Process anyway" does depends on the review reason:**
+  - Log or unknown-transfer video: encode as SDR with bt709 tags and no tone mapping. The admin can re-process with a curve afterwards.
+  - True-HDR still: Pillow converts it to 8-bit sRGB with clipping.
+  - Unrecognised container: not offered; only "Keep original only" is.
+
+### Sign-in
+
+<Mermaid
+  id="seq-otp"
+  caption="OTP sign-in. The request-code response is identical for known and unknown emails, in body, status and (approximately) time."
+  source={`sequenceDiagram
+  autonumber
+  participant B as Browser (Login screen)
+  participant A as API /api/auth
+  participant D as Postgres
+  participant M as SMTP
+  B->>A: POST request-code {email} + X-Requested-With
+  A->>A: rate limit 3/15 min per email, 10/h per IP (429 retry_after)
+  A->>D: invalidate older unconsumed codes for this email
+  alt active user
+    A->>D: insert code_hash = HMAC(pepper, email:code), expires +10 min
+    A->>M: send code (text + HTML), async after response
+  else unknown or disabled
+    A->>D: insert decoy row (random hash, same expiry), so verify behaves identically
+  end
+  A->>A: pad to the same floor (≈ 350 ms)
+  A-->>B: 204 (always)
+  B->>B: code screen, resend cooldown 60 s countdown
+  B->>A: POST verify {email, code} (auto-submits on 6th digit)
+  A->>D: newest unexpired unconsumed code, attempts += 1
+  alt attempts > 5
+    A-->>B: 429 too_many_attempts (code invalidated)
+  else timingSafeEqual(HMAC) ok and user still active
+    A->>D: consumed_at = now, insert session sha256(token), last_login_at
+    A-->>B: 200 Me + Set-Cookie sid (HttpOnly Secure SameSite=Lax, 30 d)
+    B->>B: redirect to ?next= (or /)
+  else mismatch / expired
+    A-->>B: 400 wrong_code {attemptsLeft} | expired_code
+  end`}
+/>
+
+Unknown and disabled emails get a decoy code row. Without it, an unknown email could only ever return "expired" from verify, never "wrong code, 3 attempts left", and that difference would reveal who is registered. A decoy can never verify, because its hash matches no code and verify also re-checks `status = 'active'`.
+
+Sessions slide: each authenticated request refreshes `expires_at` at most once an hour and `last_seen_at` at most every 5 minutes, so reads don't turn into a write per request. Logging out deletes one session row. "Sign out of all devices", and disabling a user, delete all of that user's rows.
+
+### Resumable upload
+
+<Mermaid
+  id="seq-upload"
+  caption="Upload with resume. Uppy stores the tus URL per file fingerprint in localStorage, so picking the same file again continues at the server's offset."
+  source={`sequenceDiagram
+  autonumber
+  participant U as Uppy (Upload screen)
+  participant T as API /api/uploads (tus)
+  participant F as ~/media/tus
+  participant D as Postgres
+  U->>T: POST (Upload-Length, metadata eventId, tier, filename, filetype)
+  T->>T: onIncomingRequest: requireCore, event exists, tier allowed, size ≤ 20 GiB
+  T->>F: create <id> + <id>.json
+  T->>D: onUploadCreate: insert asset (uploading, upload_id = <id>)
+  T-->>U: 201 Location /api/uploads/<id>
+  loop 8 MiB chunks
+    U->>T: PATCH Upload-Offset n (X-Requested-With: acm-media)
+    T->>F: append
+    T-->>U: 204 Upload-Offset n+8 MiB
+  end
+  Note over U,T: tab closed or offline → on return HEAD gives the offset, PATCH continues
+  T->>T: onUploadFinish: sniff first 4 KB (magic bytes) · ffprobe or image header (≤ 15 s, nice, 1 thread)
+  T->>F: rename to assets/ab/<asset>/original.<ext>, delete tus files
+  T->>D: asset → queued with duration, hdr, width, height · process job, one transaction
+  T-->>U: final 204 + header Asset-Id
+  U->>U: done screen with ETA from GET /api/uploads/mine
+  Note over U,T: lost final response → HEAD/PATCH on a finished id is answered from assets.upload_id (Upload-Offset = Upload-Length, Asset-Id)`}
+/>
+
+**The final PATCH does no full pass over the file.** At the host's 30 MB/s I/O limit, hashing a 3 GB clip takes about 100 seconds, so it can't happen inside an HTTP request. The finish hook therefore only:
+- sniffs the first 4 KB;
+- runs a header-only probe;
+- renames the file (same filesystem, so no data copy);
+- commits the asset and job rows.
+
+The probe fills `duration_s`, `hdr`, `width` and `height` straight away, which is what makes the done-screen ETA and the grid's placeholder sizes possible.
+
+SHA-256 is the worker's first step for every job. A match within the same event sets `duplicate_of`, and the upload and My uploads screens show the duplicate warning from the next poll.
+
+**Resume on phones.** Re-picking from the iOS photo library can change a file's name and `lastModified`, which defeats Uppy's fingerprint. So the resume banner matches re-picked files to the event's `uploading` rows by original filename and size, and continues with that row's tus id. The file input's `accept` lists `image/heic` and `video/quicktime`, so iOS sends originals instead of transcoding them. Milestone 4 checks this on a real iPhone: originals must arrive byte-identical, and HLG must survive.
+
+### Worker runner
+
+<Mermaid
+  id="worker-loop"
+  caption="One cron tick. flock makes the runner a singleton, so a 'running' job found at start is always stale."
+  source={`flowchart TD
+  C[cron, every minute] --> L{flock -n worker.lock}
+  L -- held --> X[exit 0]
+  L -- acquired --> S[reset running → queued · run_after = now + 5 min × attempts · no extra attempt]
+  S --> Q[claim: attempts < max_attempts · FOR UPDATE SKIP LOCKED · ORDER BY priority DESC, created_at]
+  Q -- none --> E[exit]
+  Q -- job --> H[sha256 original · set duplicate_of]
+  H --> K{kind}
+  K -- process/reprocess image --> I[images.py → view/thumb · encrypt if core]
+  K -- process/reprocess video --> V[video pipeline]
+  K -- retier --> R[re-seal or unseal files · swap keys]
+  K -- purge --> P[rm asset dir · delete rows]
+  I & V & R & P --> O{ok?}
+  O -- yes --> D[state done · asset ready · update ρ EMA]
+  O -- no --> F[attempts < max? queued with backoff : failed + asset failed]
+  D & F --> W{wall time > 50 min?}
+  W -- no --> Q
+  W -- yes --> E`}
+/>
+
+Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720p") and `jobs.progress`, which ffmpeg's `-progress pipe:1` provides as `out_time_ms` ÷ duration. These are the strings the queue and My uploads screens show. A child process is killed, with its process tree, after 3 × its expected cost, with a 10-minute minimum.
+
+- **Queue order.** Image, retier and purge jobs get priority 100 and videos get 0, so photos are never stuck behind a two-hour recording. "Move to the top" sets a job's priority to the current maximum + 1. The ETA function walks jobs in exactly this claim order.
+- **Attempts.** A crash costs one attempt, not two. The stale reset puts the job back with backoff and doesn't increment, and only the claim increments. Jobs at `max_attempts` are never claimed: they become `failed`, and so does their asset.
+- **Cancel.** Cancelling a queued job sets it `cancelled` straight away. For a running job, the worker checks `jobs.state` every 5 seconds while a child runs; on `cancelled` it kills the process tree and deletes `tmp/`. A first-time process job then leaves its asset `failed` with the message "Cancelled by an admin". A re-process job leaves the ready asset untouched.
+- **Retry** resets `attempts` to 0 and `run_after` to now. The uploader can retry through `POST /uploads/:assetId/retry`, admins through `/admin/jobs/:id/retry`.
+
+### Video pipeline
+
+<Diagram id="lld-video" frame="show" caption="One decode, one filter graph, three encodes, single-file HLS. The core-tier path adds the key-info file and seals the poster and original.">
+
+```html
+<div class="vp">
+  <div class="lane diagram-panel" data-rough>
+    <p class="h">1 · Probe and classify</p>
+    <div class="diagram-box">ffprobe -show_streams -show_format<small>codec · w×h · rotation · r/avg fps (VFR) · color_transfer · primaries · creation_time · make/model · dv_profile</small></div>
+    <div class="cls">
+      <span class="diagram-pill">bt709 / smpte170m / unset 8-bit → sdr</span>
+      <span class="diagram-pill">arib-std-b67 → hlg</span>
+      <span class="diagram-pill">smpte2084 → pq</span>
+      <span class="diagram-pill warn">anything else → needs_review, stop</span>
+    </div>
+  </div>
+
+  <div class="lane diagram-panel" data-rough>
+    <p class="h">2 · Tone curve (HDR only)</p>
+    <div class="row2">
+      <div class="diagram-box">tonemap_auto = false<small>Hable fallback chain (verified on server): zscale linear npl=203 → tonemap=hable → bt709 tv</small></div>
+      <div class="diagram-box">tonemap_auto = true<small>select.py: 8 frames × 4 .cube curves → PU21 → DISTS + TOPIQ ranks → m* or fallback hable203 → lut3d tetrahedral</small></div>
+    </div>
+  </div>
+
+  <div class="lane diagram-panel graph" data-rough>
+    <p class="h">3 · Encode and package (one ffmpeg run)</p>
+    <div class="fg">
+      <div class="diagram-node">-threads 2 -i SRC</div>
+      <div class="ar">→</div>
+      <div class="diagram-node">VF (sdr: format=yuv420p · hdr: chain or lut3d) · fps_mode cfr if VFR</div>
+      <div class="ar">→</div>
+      <div class="diagram-node">split=3</div>
+      <div class="ar">→</div>
+      <div class="rungs">
+        <div class="diagram-box">360p · crf 26 · max 1M/2M · aac 96k</div>
+        <div class="diagram-box">720p · crf 23 · max 3M/6M · aac 128k</div>
+        <div class="diagram-box">1080p · crf 22 · max 6M/12M · aac 128k</div>
+        <small class="diagram-muted">rungs above the source's short side are dropped; at least one kept · portrait scales width</small>
+      </div>
+      <div class="ar">→</div>
+      <div class="diagram-box out">hls/master.m3u8<br>hls/&lt;rung&gt;/index.m3u8 + data.ts<small>single_file · hls_time 6 · GOP 2 s · bt709 tags · core: AES-128 via ~/keys keyinfo</small></div>
+    </div>
+  </div>
+
+  <div class="lane diagram-panel" data-rough>
+    <p class="h">4 · Poster and finalize</p>
+    <div class="row2">
+      <div class="diagram-box">frame at 10% (same VF) → tmp PNG → images.py --poster<small>poster.webp + thumb.webp</small></div>
+      <div class="diagram-box">renditions rows (bandwidth from master) · processing_runs row<small>core: seal original, poster, thumb as .enc · delete plaintext and tmp/ · status ready</small></div>
+    </div>
+  </div>
+</div>
+```
+
+```css
+.vp { display: grid; gap: 12px; }
+.lane { padding: 12px 14px; }
+.h { margin: 0 0 8px; font-weight: 600; }
+.cls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.warn { border-color: var(--wf-warn); color: var(--wf-warn); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fg { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ar { color: var(--wf-muted); }
+.rungs { display: grid; gap: 6px; }
+.out { border-color: var(--wf-accent); }
+.vp small { display: block; color: var(--wf-muted); font-size: 12px; margin-top: 2px; }
+@media (max-width: 760px) { .row2 { grid-template-columns: 1fr; } }
+```
+
+</Diagram>
+
+**Outputs are versioned.** Every run writes into `assets/ab/<id>/r<rev>/` (`hls/`, `poster`, `thumb`). Finalize swaps the `renditions` rows and `rendition_rev` in one transaction and only then deletes the previous `r<rev>/`, so playback never sees a half-written ladder.
+
+**Sampled frames.** When automatic selection runs, `select.py` also writes its 8 sampled frames as small WebPs (long edge 320) into `runs/<run_id>/`. Only the newest run's frames are kept. For core assets they are sealed as `.enc`, like every other core output, and `/admin/assets/:id/frames/:n` serves them through the same decryptor. With `tonemap_auto=false` there are no scores or frames, and Item details shows a "Fallback curve, no scores" state instead.
+
+**File count per video** is about 2R + 3. A three-rung video costs 1 original, 1 master playlist, 3 variant playlists, 3 `data.ts` files, 1 poster and 1 thumb: 10 files whatever the length. Single-file mode combined with `-hls_key_info_file` is Milestone 0 spike 1. If hls.js won't play that combination, the fallback is normal 10-second segments, and the result goes in `docs/decisions/hls-packaging.md`.
+
+### Encrypted files at rest (core tier)
+
+<Diagram id="lld-aead" frame="show" caption="ACMENC01 layout and how an HTTP Range maps to chunks. Only the chunks that overlap the range are read, authenticated and sliced.">
+
+```html
+<div class="aead">
+  <div class="bar">
+    <div class="seg hdr diagram-box">header 32 B<small>"ACMENC01" · chunk_size u32 = 1 MiB · plaintext_size u64 · reserved 12</small></div>
+    <div class="seg nonce diagram-box">nonce_base 24 B</div>
+    <div class="seg c diagram-box">chunk 0<small>1 MiB + 16 tag</small></div>
+    <div class="seg c diagram-box hit">chunk 1</div>
+    <div class="seg c diagram-box hit">chunk 2</div>
+    <div class="seg c diagram-box">…</div>
+    <div class="seg c diagram-box last">chunk n−1<small>≤ 1 MiB + 16 · is_last = 1</small></div>
+  </div>
+  <div class="cols">
+    <div class="diagram-panel" data-rough>
+      <p class="h">Per chunk i</p>
+      <ul>
+        <li>XChaCha20-Poly1305 IETF, key = file_key</li>
+        <li>nonce = nonce_base with last 8 bytes XOR u64le(i)</li>
+        <li>AD = asset_id (16) ‖ u64(i) ‖ u8(is_last)</li>
+        <li>reorder, truncation and tampering all fail authentication</li>
+      </ul>
+    </div>
+    <div class="diagram-panel" data-rough>
+      <p class="h">Range bytes=1500000–2600000</p>
+      <ul>
+        <li>first = ⌊1500000 / 1048576⌋ = 1, last = ⌊2600000 / 1048576⌋ = 2</li>
+        <li>read offset 56 + i × (1048576 + 16), decrypt chunks 1–2</li>
+        <li>slice [1500000 − 1048576, …] and stream; Content-Length from plaintext_size</li>
+      </ul>
+    </div>
+    <div class="diagram-panel" data-rough>
+      <p class="h">Keys</p>
+      <ul>
+        <li>MASTER_KEY 32 B in shared/.env (600)</li>
+        <li>file_key 32 B and hls_key 16 B per asset, wrapped with crypto_secretbox_easy</li>
+        <li>scripts/rotate-master-key.ts re-wraps every asset_keys row</li>
+      </ul>
+    </div>
+  </div>
+</div>
+```
+
+```css
+.aead { display: grid; gap: 12px; }
+.bar { display: flex; gap: 4px; flex-wrap: wrap; }
+.seg { padding: 8px 10px; font-size: 13px; }
+.hdr { flex: 2 1 220px; } .nonce { flex: 1 1 110px; } .c { flex: 1 1 90px; }
+.hit { border-color: var(--wf-accent); background: var(--wf-accent-soft); }
+.last { flex: 1.2 1 120px; }
+.seg small { display: block; color: var(--wf-muted); font-size: 11px; }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.cols ul { margin: 0; padding-left: 16px; font-size: 13px; display: grid; gap: 4px; }
+.h { margin: 0 0 6px; font-weight: 600; }
+@media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+```
+
+</Diagram>
+
+### Core video playback
+
+<Mermaid
+  id="seq-hls"
+  caption="Core-tier playback. Playlists and data.ts stay as ffmpeg wrote them; the key route is the only extra hop, and it obeys the same 404 rule."
+  source={`sequenceDiagram
+  participant P as Player (hls.js)
+  participant A as API /api/media/:id/hls
+  participant F as ~/media/assets/ab/<id>/hls
+  participant K as asset_keys
+  P->>A: GET master.m3u8 (cookie)
+  A->>A: canView(user, asset) else 404
+  A->>F: read master.m3u8
+  A-->>P: 200 private, no-cache
+  P->>A: GET 720p/index.m3u8
+  A-->>P: playlist with #EXT-X-KEY URI=/api/media/<id>/hls/key and #EXT-X-BYTERANGE entries
+  P->>A: GET hls/key
+  A->>K: unwrap hls_key with MASTER_KEY
+  A-->>P: 16 bytes, no-store
+  loop segments
+    P->>A: GET 720p/data.ts Range bytes=a-b
+    A->>F: sendFile with Range (AES-128 already applied at rest)
+    A-->>P: 206 video/mp2t
+  end
+  Note over P: Auto shows the current level; manual picker lists only existing levels`}
+/>
+
+Member-tier videos take the same path without the key hop. Images and posters are served from `/api/media/:id/{thumb,view,poster}?v=<rendition_rev>` with `Cache-Control: private, max-age=31536000, immutable`, so scrolling back through a grid costs no requests. The version is the asset's `rendition_rev`, not the global settings version, so a curve override or a new cover is visible straight away.
+
+### ETA
+
+The handoff's formula is implemented once in `packages/core/eta.ts` and used by both the API (My uploads, the queue) and the worker (`jobs.est_seconds`):
+
+<Code
+  id="eta-code"
+  filename="packages/core/src/eta.ts"
+  language="ts"
+  code={"export type EtaJob = { kind: 'image' | 'video'; hdr: 'sdr' | 'hlg' | 'pq' | 'unknown' | null; durationS: number | null; progress: number | null };\n\nexport function jobCost(j: EtaJob, rho: { sdr: number; hdr: number }): number {\n  if (j.kind === 'image') return 3;\n  const d = j.durationS ?? 0;\n  return j.hdr === 'hlg' || j.hdr === 'pq' ? rho.hdr * d + 60 : rho.sdr * d;\n}\n\n/** Seconds until each job finishes, in queue order (running job first, scaled by its remaining progress). */\nexport function queueEtas(ordered: EtaJob[], rho: { sdr: number; hdr: number }): number[] {\n  let t = 0;\n  return ordered.map((j) => (t += jobCost(j, rho) * (1 - (j.progress ?? 0))));\n}\n"}
+/>
+
+After each video job, the worker updates `rho_sdr` or `rho_hdr` in `app_settings` with an exponential moving average (α = 0.2) of measured *encode* time ÷ duration. Scoring time is excluded, because the fixed 60 seconds already covers it. Over time the estimates track the real host. Jobs are summed in claim order (priority, then age), the same order the worker uses.
+
+### HTTP API
+
+All routes live under `/api`. Errors are `{error, message}`, and pagination uses cursors (`?cursor=&limit=`, at most 100). Every state-changing route needs `X-Requested-With: acm-media`.
+
+<Table
+  id="api-table"
+  columns={["Method", "Path", "Role", "Screen that calls it"]}
+  rows={[
+    ["POST", "/auth/request-code · /auth/verify", "public", "Login (email, code)"],
+    ["POST", "/auth/logout · /auth/logout-all", "user", "Account"],
+    ["GET / PATCH", "/me", "user", "App shell, Account"],
+    ["GET", "/events?q=&year=&hasVideos=&cursor=", "user", "Library"],
+    ["POST / PATCH / DELETE", "/events · /events/:id", "core · core · admin", "Upload step 1, Event edit"],
+    ["GET", "/events/:idOrSlug · /events/:id/assets?kind=&tier=&cursor=", "user", "Event page"],
+    ["GET / PATCH / DELETE", "/assets/:id", "user · core own or admin · admin", "Viewer, Player, Item details"],
+    ["GET", "/media/:id/thumb|view|poster|original", "canView", "Grids, Viewer, Download original"],
+    ["GET", "/media/:id/hls/master.m3u8 · :variant/index.m3u8 · :variant/data.ts · hls/key", "canView", "Player"],
+    ["ALL", "/uploads/* (tus)", "core", "Upload"],
+    ["GET", "/uploads/mine?cursor=", "core", "My uploads, resume banner, shell processing indicator"],
+    ["POST", "/uploads/:assetId/retry", "core (own)", "My uploads (Retry)"],
+    ["GET / POST", "/admin/users · /admin/users/bulk", "admin", "Admin · Members"],
+    ["PATCH", "/admin/users/:id", "admin", "Admin · Members"],
+    ["GET", "/admin/jobs?tab=running|queued|failed|needs_review|recent (includes queue summary)", "admin", "Admin · Processing queue"],
+    ["POST", "/admin/jobs/:id/retry · /cancel · /prioritize", "admin", "Queue (Retry, Move to the top)"],
+    ["GET", "/admin/assets/:id/processing · /frames/:n", "admin", "Admin · Item details"],
+    ["POST", "/admin/assets/:id/reprocess · /resolve", "admin", "Item details, Needs review"],
+    ["GET", "/admin/storage", "admin", "Admin · Storage"],
+    ["GET / PATCH", "/admin/settings", "admin", "Admin · Storage (inode limit), Item details (auto curve)"],
+    ["GET", "/health", "public", "cron health check (DB ping, disk free, last worker tick)"],
+  ]}
+/>
+
+Endpoints and parameters this plan adds or changes:
+- **Additions:** `POST /admin/jobs/:id/prioritize` (the design's "Move to the top"), `POST /uploads/:assetId/retry` (the design's uploader Retry) and `GET /health` (the health cron).
+- **`/admin/jobs?tab=` replaces `?state=`.** "Needs review" is an asset status and "Recent" means recently completed, so neither is a job state. The tabs map to:
+  - `running` → `state = running`;
+  - `queued` → `state = queued`;
+  - `failed` → `state = failed`;
+  - `needs_review` → the asset's status, joined with its job (whose `outcome` is `needs_review`);
+  - `recent` → `state = done`, last 7 days.
+- **Settings guard.** `PATCH /admin/settings` refuses `tonemap_auto = true` until the validation gate's marker file exists in the release.
+- **Audit coverage.** Every admin mutation, every tier change (including a core member changing the tier of their own upload) and every delete writes `audit_log`.
+- **Last-admin guard.** It runs under `SELECT … FOR UPDATE` on the admin rows, so two admins can't demote each other at the same moment. Demoting a core admin to member clears `is_admin` in the same statement.
+
+**Errors.** Every error code comes from one `ErrorCode` union in `packages/core`. Field names are camelCase, except the handoff's mandated `retry_after`, which also goes out as a `Retry-After` header. tus errors use the same JSON body.
+
+The three contracts that are hardest to change once clients depend on them:
+
+<Endpoint id="ep-verify" method="POST" path="/api/auth/verify" summary="Exchange an emailed code for a session" auth="none (X-Requested-With required)" params={[
+  { "name": "email", "in": "body", "type": "string", "required": true, "description": "Lower-cased by the server." },
+  { "name": "code", "in": "body", "type": "string", "required": true, "description": "Exactly 6 digits." }
+]} request={{ "contentType": "application/json", "example": "{ \"email\": \"sara@qu.edu.qa\", \"code\": \"042917\" }" }} responses={[
+  { "status": "200", "description": "Signed in; Set-Cookie sid", "example": "{ \"id\": \"0192f0c8-…\", \"email\": \"sara@qu.edu.qa\", \"name\": \"Sara\", \"role\": \"member\", \"isAdmin\": false }" },
+  { "status": "400", "description": "wrong_code with attempts left, or expired_code", "example": "{ \"error\": \"wrong_code\", \"message\": \"That code isn't right.\", \"attemptsLeft\": 3 }" },
+  { "status": "429", "description": "too_many_attempts (code invalidated; no retry_after) or rate_limited (retry_after seconds + Retry-After header)", "example": "{ \"error\": \"rate_limited\", \"message\": \"Try again in 12 minutes.\", \"retry_after\": 720 }" }
+]}>
+
+The Login screen's code states (wrong code with attempts left, expired, too many attempts) map one-to-one onto these error codes.
+
+</Endpoint>
+
+<Endpoint id="ep-assets" method="GET" path="/api/events/{id}/assets" summary="Media grid for one event, filtered per viewer" auth="session cookie" params={[
+  { "name": "kind", "in": "query", "type": "image | video" },
+  { "name": "tier", "in": "query", "type": "member | core", "description": "Ignored for members." },
+  { "name": "cursor", "in": "query", "type": "string" },
+  { "name": "limit", "in": "query", "type": "int ≤ 100" }
+]} responses={[
+  { "status": "200", "description": "Page of tiles", "example": "{ \"items\": [ { \"id\": \"…\", \"kind\": \"video\", \"tier\": \"core\", \"status\": \"processing\", \"width\": 1920, \"height\": 1080, \"durationS\": 30.1, \"thumbUrl\": \"/api/media/…/thumb?v=3\", \"step\": \"Encoding 720p\", \"progress\": 0.42, \"readyInS\": 1260 } ], \"nextCursor\": \"eyJ0IjoiMjAyNi0xMC0yOFQxMDoxMiIsImkiOiIwMTky…\" }" },
+  { "status": "404", "description": "Event missing or deleted" }
+]}>
+
+`width` and `height` come from the ingest probe, so they're present from `queued` onward. The justified grid can lay out rows before the thumbnails load; a still-`uploading` tile uses a 4:3 placeholder. Members get only `ready` member-tier items. Core members also get their own unfinished uploads; admins get everyone's.
+
+</Endpoint>
+
+<Endpoint id="ep-original" method="GET" path="/api/media/{id}/original" summary="Download the original, plain or decrypted on the fly" auth="session cookie + canView" params={[
+  { "name": "Range", "in": "header", "type": "bytes=a-b" }
+]} responses={[
+  { "status": "200", "description": "Whole file; Content-Disposition attachment; filename*=UTF-8''IMG_4515.MOV" },
+  { "status": "206", "description": "Partial; same headers plus Content-Range" },
+  { "status": "404", "description": "Missing or not visible to this user (same response)" }
+]}>
+
+For an `.enc` file, the response body comes from the chunk-range decryptor shown above. The client can't tell a plain file from an encrypted one.
+
+</Endpoint>
+
+### Key files
+
+<TabsBlock
+  id="key-files"
+  orientation="vertical"
+  tabs={[
+    { id: "kf-canview", label: "policy/canView.ts", blocks: [
+      { id: "kf-canview-code", type: "annotated-code", data: {
+        filename: "apps/api/src/policy/canView.ts", language: "ts",
+        code: "import type { Asset, Viewer } from '@acm/core/schemas';\n\nexport const LEVELS = ['none', 'status', 'download', 'full'] as const;\nexport type Access = (typeof LEVELS)[number];\n\nexport function access(v: Viewer | null, a: Asset, eventDeleted: boolean): Access {\n  if (!v || v.status !== 'active') return 'none';\n  if (a.deletedAt || eventDeleted || a.status === 'deleting') return 'none';\n  if (a.tier === 'core' && v.role !== 'core') return 'none';\n  if (a.status === 'ready') return 'full';\n  if (a.status === 'original_only') return 'download';\n  const ownsOrAdmin = v.isAdmin || a.uploaderId === v.id;\n  return ownsOrAdmin ? 'status' : 'none';\n}\n\n/** Route guard: anything below `min` becomes a 404. */\nexport const atLeast = (have: Access, min: Access) => LEVELS.indexOf(have) >= LEVELS.indexOf(min);\n",
+        annotations: [
+          { lines: "7-9", label: "404 first", note: "Disabled users, deleted rows and core tier for members all collapse to 'none'. Routes map anything below their minimum to 404, never to 403." },
+          { lines: "11", label: "Original only", note: "Downloadable and listed, but not streamable: /original needs 'download'; thumb, view, HLS and key need 'full'." },
+          { lines: "12-13", label: "Status tiles", note: "Unfinished items are visible as status only, to their uploader and to admins. No media bytes." }
+        ] } }
+    ]},
+    { id: "kf-claim", label: "worker/run.ts", blocks: [
+      { id: "kf-claim-code", type: "annotated-code", data: {
+        filename: "apps/worker/src/run.ts", language: "ts",
+        code: "const DEADLINE = Date.now() + 50 * 60_000;\n\nawait db.execute(sql`update jobs set state='queued', attempts=attempts+1 where state='running'`);\n\nwhile (Date.now() < DEADLINE) {\n  const [job] = await db.execute<Job>(sql`\n    update jobs set state='running', started_at=now(), attempts=attempts+1\n    where id = (select id from jobs where state='queued' and run_after<=now()\n                order by priority desc, created_at limit 1 for update skip locked)\n    returning *`);\n  if (!job) break;\n  await runJob(job).then(markDone, (err) => markFailedOrRetry(job, err));\n}\nawait db.end();\n",
+        annotations: [
+          { lines: "3", label: "Stale reset", note: "flock guarantees a single runner, so any 'running' row at start belongs to a runner that died." },
+          { lines: "6-10", label: "9.6-safe claim", note: "SKIP LOCKED exists since 9.5; the priority column backs Move to the top." },
+          { lines: "5", note: "The 50-minute limit is checked between jobs, never inside one, so a 3-hour encode finishes." }
+        ] } }
+    ]},
+    { id: "kf-tus", label: "routes/uploads.ts", blocks: [
+      { id: "kf-tus-code", type: "annotated-code", data: {
+        filename: "apps/api/src/routes/uploads.ts", language: "ts",
+        code: "const tus = new Server({\n  path: '/api/uploads',\n  datastore: new FileStore({ directory: path.join(cfg.MEDIA_ROOT, 'tus') }),\n  maxSize: cfg.UPLOAD_MAX_BYTES,\n  respectForwardedHeaders: true,\n  async onIncomingRequest(req) {\n    const user = await sessionFromRaw(req);\n    if (!user || user.role !== 'core') throw jsonError(404, 'not_found');\n    if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers['x-requested-with'] !== 'acm-media') throw jsonError(403, 'csrf');\n  },\n  async onUploadCreate(req, upload) {\n    await assertEventAndTier(upload.metadata);\n    await insertUploadingAsset(upload); // status 'uploading', upload_id = upload.id\n    return { metadata: upload.metadata };\n  },\n  async onUploadFinish(req, upload) {\n    const asset = await ingest(upload); // sniff 4 KB, header probe, rename, asset -> queued + job in one tx\n    return { headers: { 'Asset-Id': asset.id } };\n  },\n});\napp.all('/api/uploads', (req, rep) => tus.handle(req.raw, rep.raw));\napp.all('/api/uploads/*', (req, rep) => tus.handle(req.raw, rep.raw));\n",
+        annotations: [
+          { lines: "5", label: "Passenger", note: "Apache terminates TLS, so tus has to build Location URLs from the forwarded headers." },
+          { lines: "11-15", label: "Row from the start", note: "The uploading row makes My uploads and the resume banner server-driven." },
+          { lines: "16-19", label: "Ingest", note: "Fast and bounded: no full read of the file inside the request. Type is sniffed from magic bytes, never from the extension; hashing happens in the worker." },
+          { lines: "21-22", note: "The Fastify content-type parser is disabled for this prefix so tus reads the raw stream. A HEAD on a finished id is answered from assets.upload_id before tus sees it." }
+        ] } }
+    ]},
+    { id: "kf-client", label: "web/api + data", blocks: [
+      { id: "kf-client-code", type: "annotated-code", data: {
+        filename: "apps/web/src/api/client.ts · apps/web/src/data/uploads.ts", language: "ts",
+        code: "// api/client.ts\nexport async function call<T>(schema: z.ZodType<T>, path: string, init: RequestInit = {}): Promise<T> {\n  const res = await fetch(`/api${path}`, { ...init, headers: { 'X-Requested-With': 'acm-media', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } });\n  if (res.status === 401) throw new SessionExpired(location.pathname + location.search);\n  if (!res.ok) throw ApiError.from(await res.json().catch(() => ({})), res.status);\n  return res.status === 204 ? (undefined as T) : schema.parse(await res.json());\n}\nexport const getMyUploads = (cursor?: string) => call(MyUploadsPage, `/uploads/mine${q({ cursor })}`);\n\n// data/uploads.ts\nexport function useMyUploads() {\n  return useInfiniteQuery({\n    queryKey: ['uploads', 'mine'],\n    queryFn: ({ pageParam }) => getMyUploads(pageParam),\n    getNextPageParam: (p) => p.nextCursor ?? undefined,\n    refetchInterval: (q) => (q.state.data?.pages.some((p) => p.items.some(isUnfinished)) ? 5000 : false),\n  });\n}\n",
+        annotations: [
+          { lines: "4", label: "Session expired", note: "A 401 anywhere opens the design's session-expired state and returns to the same page after sign-in." },
+          { lines: "6", note: "Responses are parsed with the same zod schemas the API uses to serialize them." },
+          { lines: "16", label: "Polling", note: "Polls every 5 s only while something is unfinished, which keeps entry processes low." }
+        ] } }
+    ]}
+  ]}
+/>
+
+### Security controls
+
+- **Headers (Helmet):**
+  - CSP: `default-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; img-src 'self' blob: data:; font-src 'self'; style-src 'self'; frame-ancestors 'none'`. hls.js needs `blob:` for MediaSource and its worker.
+  - `Referrer-Policy: same-origin`.
+  - HSTS, added once AutoSSL is confirmed.
+- **Log redaction.** The pino redaction paths cover `req.headers.cookie`, `set-cookie`, `body.code`, `body.email` on auth routes, and every key-bearing field. The worker never logs `params` that carry key paths.
+- **Secrets.** `.env.example` ships with every variable from the handoff's §12. On the server, `shared/.env` is chmod 600. `MASTER_KEY` is also kept in the chapter's password manager.
+- **Ops.** One SSH key per maintainer, cPanel 2FA, and the known Postgres 9.6 exposure, all documented in `docs/ops.md`.
+
+## Implementing the Darkroom Archive design
+
+The canvas is the visual source of truth. The merged system is *Darkroom colors, Archive type, sharp corners*:
+- **Palette:** cool grays with an espresso-brown primary (`#4E3423` in light, `#CFA889` as the foreground accent in dark).
+- **Type:** Hanken Grotesk for UI, Fraunces for display.
+- **Shape:** two radii only, 0 and 999px.
+- **Controls:** 44px tall.
+- **Status colors:** never brown, always paired with an icon.
+
+The canvas's `project/app.css` already defines every token and the base component classes (`.btn-*`, `.chip`, `.st-*`, `.tier`, `.tbl`, `.tabs`, `.tile`, `.jgrid`, `.covers`, `.skel`, the responsive breakpoint at 760px). It becomes `apps/web/src/styles/tokens.css` and `base.css` nearly verbatim. Two changes: the `.app[data-theme=dark]` selector also matches `prefers-color-scheme` when no manual choice is saved, and the Google Fonts link becomes self-hosted `@fontsource-variable` files, so the CSP can stay `font-src 'self'`.
+
+<Table
+  id="screen-map"
+  columns={["Design artboard(s)", "Route", "Screen component", "Data hooks → endpoints", "Notes from the canvas"]}
+  rows={[
+    ["Login · PhoneLogin", "/login", "LoginScreen (EmailStep, CodeStep)", "useRequestCode, useVerify → /auth/*", "Neutral sent message; paste and auto-submit on the 6th digit; resend countdown"],
+    ["Library · PhoneLibrary", "/", "LibraryScreen", "useEvents (infinite) → /events", "Covers show the title only; year dividers; processing indicator for core"],
+    ["Event · PhoneEvent", "/events/:slug", "EventScreen + JustifiedGrid", "useEvent, useEventAssets → /events/:idOrSlug, /events/:id/assets", "Select mode with per-file downloads; tier filter for core; skeleton row while the next page loads"],
+    ["Viewer · PhoneViewer", "/p/:assetId", "Lightbox (image) over its event", "useAsset → /assets/:id; img src /media/:id/view", "Always dark; ← → I Z Esc; thumbnail first, then the view copy; HEIC adds Download as JPEG"],
+    ["Player", "/p/:assetId", "Lightbox (video) + Player over its event", "useAsset; hls.js → /media/:id/hls/*", "Space F M keys; Auto shows the current level; only existing rungs"],
+    ["Upload · PhoneUpload", "/upload", "UploadScreen (ChooseEvent, AddFiles, Progress, Done)", "useCreateEvent; Uppy tus → /uploads", "Resume banner; offline auto-resume; duplicate flag; HDR-off tip"],
+    ["MyUploads · PhoneMyUploads", "/uploads", "MyUploadsScreen", "useMyUploads (polling) → /uploads/mine", "Grouped by event; plain-language errors; Retry"],
+    ["AdminQueue", "/admin/queue", "QueueScreen", "useJobs(state) → /admin/jobs", "Health summary; Move to the top; Needs review actions"],
+    ["AdminItem", "/admin/items/:assetId", "ItemDetailsScreen", "useProcessing → /admin/assets/:id/processing, /frames/:n", "Scores table, 8 frames on a timeline, override + re-process with ETA confirm"],
+    ["AdminMembers", "/admin/members", "MembersScreen", "useUsers, useBulkAdd → /admin/users*", "Bulk paste; in-page confirms; last-admin guard"],
+    ["AdminStorage", "/admin/storage", "StorageScreen", "useStorage → /admin/storage", "Unknown limit state; growth chart"],
+    ["Account", "/account", "AccountScreen", "useMe, useLogoutAll → /me, /auth/*", "Name editable; email read-only"],
+    ["States", "(global)", "SessionExpired, NotFound, OfflineBanner, ServerError", "client.ts error mapping", "Not found covers both missing and forbidden"],
+    ["Phone · Arabic boards", "(locale, later)", "same screens with dir=rtl", "—", "v1 ships English; the i18n layer and logical CSS make Arabic a translation file plus a QA pass"],
+  ]}
+/>
+
+<Callout id="routes-decision" tone="decision">
+
+**Public URLs: `/events/:slug` and `/p/:assetId`.**
+- **The viewer and player are a modal route.** Opening an item from a grid pushes `/p/:assetId` with the grid as the background location: the back button closes the lightbox and the grid keeps its scroll position. A direct visit loads the asset, then its current event underneath, so links survive moving an asset to another event. My uploads and Admin link to the same URL.
+- **Slugs never change.** A slug is assigned once at creation: the start date plus the ASCII-folded title (`2026-10-28-hackathon-day-1`), falling back to the date plus a short id when the title folds to nothing, as an Arabic title would. A collision gets `-2`, `-3`. Editing the title never changes the slug, so shared links keep working.
+- `GET /events/:idOrSlug` accepts either form.
+
+
+
+</Callout>
+
+<Callout id="i18n-decision" tone="decision">
+
+**English only in v1, built on i18n from the first screen.**
+- **Strings.** Every user-visible string goes through `i18next` + `react-i18next` with ICU plurals (`{count, plural, one {# photo} other {# photos}}`), from `apps/web/src/i18n/en.json` grouped by screen. A lint rule fails the build on string literals in JSX.
+- **Formatting.** Dates, numbers, sizes and durations go through `Intl` helpers in `i18n/format.ts`, keyed on the active locale.
+- **Layout.** CSS uses logical properties only (`margin-inline-start`, `inset-inline-*`, `text-align: start`), as the design's `app.css` already does. Direction-dependent icons carry the `.flip` class. `<html lang dir>` is set from the locale, and filenames and emails are wrapped in `<bdi>`.
+- **Adding Arabic later** means adding `ar.json`, the Vazirmatn and Noto Naskh fonts, and a language switch, with no component changes.
+
+</Callout>
+
+<Callout id="jpeg-decision" tone="decision">
+
+**HEIC photos also get a JPEG copy at ingest.** `images.py` writes `download.jpg` for HEIC/HEIF originals: sRGB, quality 90, EXIF orientation applied, capture date and device kept in the metadata. It is sealed as `.enc` for core assets. It is a new rendition kind `image_jpeg`, served by `GET /media/:id/jpeg` (minimum level `download`), and the viewer shows "Download as JPEG" next to "Download original · HEIC · 3.1 MB". It costs one extra file per HEIC asset and nothing at request time.
+
+</Callout>
+
+Interaction details the artboards imply and the code must honor:
+- **Justified grid.** Rows are computed from `width` / `height` before images load, and virtualized with `@tanstack/react-virtual` by row. The next page is fetched when the last virtual row comes within two screens of the viewport. This is how the grid stays smooth at tens of thousands of items.
+- **Resume after closing the tab.** The upload screen reads Uppy's stored tus fingerprints at mount. For each one, it compares `HEAD` offsets with the event's server-side assets, and shows "Resume N unfinished uploads" when any remain. Picking the same files continues from the stored offsets.
+- **Keyboard.** The lightbox traps focus. Arrow keys, I, Z and Esc are bound to the dialog element, not to `window`. Tables and tabs follow the WAI-ARIA patterns, and `prefers-reduced-motion` disables the shimmer and transitions, matching `app.css`.
+- **Alt text.** Alt text falls back to "Photo from ‹event title›, ‹date›" when there is nothing better.
+
+## Milestones
+
+Each milestone ends with passing tests and a demo on a local stack. From Milestone 3 onward, each one is also deployed to the production subdomain behind a "not launched" allow-list of admin emails. One app, one database, one `MEDIA_ROOT` and one worker means no second set of keys and no cookie collisions. Launch then means removing the allow-list.
+
+<Checklist
+  id="milestones"
+  items={[
+    { id: "m0", label: "M0 · Server spikes (half a day)", note: "Create quhosting_library + role with uapi (password straight into shared/.env). Assert server_version_num ≥ 90500, connect over the socket and 127.0.0.1, run a test pg_dump. Load sodium-native under alt-nodejs24. Load pillow-heif in a py313 venv. hls.js plays single_file + AES-128 output. Send an 8 MiB request body through Passenger. Check which Passenger instance-cap directive .htaccess accepts, and that a symlink flip + restart picks up the new release. A 60-minute cron job survives." },
+    { id: "m1", label: "M1 · Workspace scaffold", note: "npm workspaces (apps/api, apps/worker, apps/web, packages/core, py/mediaworker); strict TS; zod config; Drizzle schema + first migration (9.6-safe); docker-compose postgres:9.6; scripts/bootstrap-admin.ts; docs/HANDOFF.md + CLAUDE.md." },
+    { id: "m2", label: "M2 · Auth + shell", note: "OTP, sessions, rate limits, nodemailer, CSRF header; /me. tokens.css, app shell, Login screens (desktop + phone), session-expired and not-found states." },
+    { id: "m3", label: "M3 · Library read path", note: "Events and assets APIs with per-viewer counts and cursors; canView matrix tests; seed script; Library, Event, JustifiedGrid with virtualization and skeletons. First staging deploy." },
+    { id: "m4", label: "M4 · Uploads", note: "@tus/server + ingest (magic bytes, sha256, duplicate flag); Upload flow with Uppy, resume banner, offline; My uploads with polling and client-side merge of in-flight files." },
+    { id: "m5", label: "M5 · Worker + images", note: "cron runner, claim, backoff, timeouts, thread caps; images.py (HEIC/P3/EXIF/alpha); media routes for thumb, view and original with Range; image Lightbox." },
+    { id: "m6", label: "M6 · SDR video + player", note: "Ladder builder, single-file HLS, poster, renditions; HLS routes; Player with quality menu and keyboard support." },
+    { id: "m7", label: "M7 · HDR + needs review", note: "Classifier; verified Hable fallback chain; Log/unknown → needs_review; resolve endpoint; ETA with ρ EMA." },
+    { id: "m8", label: "M8 · Encryption", note: "ACMENC01 seal/open + Range decryptor; key wrap; HLS AES-128 keyinfo + key route; retier and reprocess-on-tier-change; rotate-master-key script; docs/security.md." },
+    { id: "m9", label: "M9 · Admin", note: "Members (bulk, last-admin guard, disable → sessions purged), Queue (tabs, summary, retry/cancel/prioritize), Item details, Storage + nightly stats, audit log." },
+    { id: "m10", label: "M10 · Tone-curve selection", note: "Install torch (CPU wheel) and pyiqa into ~/venvs/worker here and record the size and inode cost. luts.py (4 × 65³ .cube) + table-vs-zscale acceptance test (< 2 code values); select.py with PU21, DISTS, TOPIQ and sampled-frame WebPs; validation gate reproduces hable_203 first; pre-fetched weights; tonemap_auto can only be enabled after the gate passes." },
+    { id: "m11", label: "M11 · Production", note: "library.qu.acm.org + AutoSSL; Setup Node.js App; deploy.sh; crontab (worker, cleanup, stats, backup, health); docs/ops.md (EOL Postgres, no original backups, 2FA, key handling); production smoke." }
+  ]}
+/>
+
+<Callout id="scope-callout" tone="info">
+
+**Out of scope for v1**, as both handoffs specify: public share links, comments and likes, people tags, photo editing, zip downloads, HDR renditions for HDR displays, native apps, DRM, and offsite backup of originals. `docs/ops.md` will flag that last gap as the biggest operational risk.
+
+</Callout>
+
+## Risks
+
+<Table
+  id="risks"
+  columns={["Risk", "Likelihood", "Mitigation"]}
+  rows={[
+    ["The cPanel Postgres is older or different than 9.6, or its pg_hba blocks TCP", "Medium", "Milestone 0 spike 1. The schema is a 9.6 subset, so any newer server works. Connect over the Unix socket if TCP is refused."],
+    ["Host kills ffmpeg runs over 60 minutes under cron", "Medium", "Milestone 0 spike. If it happens, split the video job into resumable steps (probe → select → encode per rung → finalize); each step is already idempotent."],
+    ["Thread limit (200) hit by a hidden auto-threaded library", "Medium", "Caps everywhere, plus a test that counts /proc/self/task during an encode. torch.set_num_threads(2) runs before any model loads."],
+    ["torch CPU venv is too heavy in inodes or disk", "Medium", "Installed and measured in Milestone 10. Tone-curve selection is optional; the Hable fallback ships without torch."],
+    ["8 MiB request bodies rejected by Apache or Passenger", "Low", "Config flag for the chunk size; 5 MiB fallback."],
+    ["OTP mail lands in spam at QU student mailboxes", "Medium", "Check SPF, DKIM and DMARC in cPanel → Email Deliverability; test both mailbox types in Milestone 2."],
+    ["A Passenger restart during a long tus PATCH", "Low", "tus resumes from the last committed offset; Uppy retries with backoff."],
+    ["MASTER_KEY lost", "Low but fatal", "Store it in the chapter's password manager as well as in shared/.env; docs/ops.md says that without it core files are unrecoverable."],
+  ]}
+/>
+
+## Verification
+
+- **Unit and integration (Vitest with `app.inject`).**
+  - OTP lifecycle: expiry, attempts, rate limits, and identical responses for unknown emails.
+  - Sessions, sliding expiry and the CSRF header.
+  - The 128-case `canView` matrix.
+  - Range on plain and `.enc` files, crossing chunk boundaries and the last chunk.
+  - The HLS key route returns 404 for members.
+  - tus: happy path, resume, wrong type rejected.
+  - ETA math.
+  - All of this runs against `postgres:9.6` in docker.
+- **Crypto.** Round trip, tampering, truncation, chunk reordering and empty files for ACMENC01.
+- **Worker.**
+  - `testsrc2` fixtures: SDR 1080p landscape, portrait, VFR, no-audio, and 360p-only (the ladder skips rungs).
+  - `IMG_4515.MOV` for HLG.
+  - Assert the outputs exist, `master.m3u8` parses, and every variant is tagged bt709.
+  - On the server, check the whole account's thread count against the 200 limit while an HDR encode and an upload run together. Measure with `ps -L -u quhosting | wc -l`; the budget is ≤ 150.
+    - ffmpeg is about 40 threads: decode 2, filters 4, and 3 x264 encoders with 2 threads plus lookahead each.
+    - Node API about 12 (`UV_THREADPOOL_SIZE=4`), worker Node about 10, Python about 6, and the rest is headroom for cron and SSH.
+- **Python (pytest).** HEIC with a P3 profile, EXIF rotation, PNG with alpha, `.cube` generation, the hable203 acceptance test, and `pytest -m validation` for the selection gate.
+- **UI.** Playwright at 390px and 1440px in both themes, covering flows 1–7 from the design handoff against a seeded local stack. Includes axe checks for WCAG 2.2 AA contrast and keyboard-only passes through the lightbox, player, grids and tables.
+- **Production smoke (`scripts/smoke.ts`).**
+  1. Sign in as a seeded test member by reading the OTP over IMAP from a dedicated `smoke@qu.acm.org` mailbox on the same account. Production has no auth bypass. All smoke data lives in one "Smoke test" event that the script purges at the end.
+  2. Upload a 5-second HLG clip and a HEIC photo as core.
+  3. Poll until both are `ready`.
+  4. Fetch `master.m3u8` and a byte range of `data.ts`.
+  5. Download the original with `Range: bytes=0-99`.
+  6. Confirm that a member session gets 404 for a core asset, its media and its key.
+  7. Check on disk that the core asset's files end in `.enc` and that `~/keys` is empty.
+
+### Decisions taken
+
+<Table
+  id="decisions"
+  columns={["Question", "Decision"]}
+  rows={[
+    ["Production hostname", "library.qu.acm.org (cPanel subdomain + AutoSSL)"],
+    ["Database and role", "Created over SSH with uapi: quhosting_library and quhosting_library_app; the password goes straight into shared/.env"],
+    ["Arabic", "English only in v1, built on i18next with logical CSS so Arabic is a translation file later"],
+    ["Download as JPEG for HEIC", "Yes: download.jpg generated at ingest"],
+    ["torch and pyiqa", "Installed in Milestone 10, when automatic tone-curve selection is built"],
+    ["First admin", "tech@qu.acm.org, created by scripts/bootstrap-admin.ts"],
+    ["Upload client", "tus-js-client directly (the library Uppy's tus plugin wraps) behind the design's own upload screens; Uppy's dashboard UI isn't used, so it is left out"],
+    ["Event visibility for members", "Members see an event only when it holds something they can see; core members see every event, including empty ones to upload into"],
+    ["React Router", "v7: v8 requires React 19, and the handoff fixes React 18"],
+    ["Local dev ports", "API 3080 and Vite 5180 (strict), because 3000 and 5173 are commonly taken"],
+  ]}
+/>
+
+### Open Questions
+
+<QuestionForm
+  id="open-questions"
+  questions={[
+    { id: "q-sender", title: "Which mailbox sends sign-in codes?", subtitle: "OTP mail needs SMTP credentials for a qu.acm.org mailbox. A dedicated sender keeps replies and bounces out of the tech inbox.", mode: "single", options: [
+      { id: "noreply", label: "Create noreply@qu.acm.org", detail: "I create it with uapi Email add_pop over SSH and store its password only in shared/.env.", recommended: true },
+      { id: "tech", label: "Send from tech@qu.acm.org", detail: "You provide its password in the local .env; replies land in the tech inbox." }
+    ] },
+    { id: "q-build", title: "Where are releases built?", subtitle: "The backend handoff's §13 (Decided) says build on the server. The plan recommends building locally, for inode and CPU reasons.", mode: "single", options: [
+      { id: "local", label: "Build locally, rsync bundles", detail: "A few hundred files on the server; builds never compete with live traffic; needs a dev machine to deploy.", recommended: true },
+      { id: "server", label: "git pull + build on the server", detail: "Matches the handoff; deploys from any SSH session; about 30k node_modules files and a CPU-heavy build on the shared host." }
+    ] }
+  ]}
+  submitLabel="Send answers"
+/>

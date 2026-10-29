@@ -1,0 +1,16 @@
+# crontab for quhosting (install with: crontab deploy/crontab.template after reviewing paths)
+SHELL=/bin/bash
+NODE=/opt/alt/alt-nodejs24/root/usr/bin/node
+APP=/home/quhosting/apps/acm-media/current
+ENVF=/home/quhosting/apps/acm-media/shared/.env
+
+# Worker: one runner at a time; each tick runs jobs for up to 50 minutes.
+* * * * * /usr/bin/flock -n /home/quhosting/tmp/acm-worker.lock $NODE --env-file=$ENVF $APP/worker/run.mjs >> /home/quhosting/logs/acm-worker.log 2>&1
+# Housekeeping: abandoned uploads, expired sessions and codes, crash leftovers.
+7 * * * * $NODE --env-file=$ENVF $APP/worker/cleanup.mjs >> /home/quhosting/logs/acm-cleanup.log 2>&1
+# Storage numbers for Admin · Storage.
+23 3 * * * $NODE --env-file=$ENVF $APP/worker/stats.mjs >> /home/quhosting/logs/acm-stats.log 2>&1
+# Database backup (public schema only: the PostGIS topology schema can't be dumped by our role). Keeps 14.
+41 3 * * * /home/quhosting/apps/acm-media/shared/backup.sh >> /home/quhosting/logs/acm-backup.log 2>&1
+# Health: mails tech@qu.acm.org after three failures in a row.
+*/10 * * * * /home/quhosting/apps/acm-media/shared/health.sh >> /home/quhosting/logs/acm-health.log 2>&1
