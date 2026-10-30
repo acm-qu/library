@@ -14,6 +14,8 @@ export const LIMITS = {
   requestCodeEmailDay: { max: 10, timeWindow: DAY },
   requestCodeIp: { max: 10, timeWindow: HOUR },
   verifyIp: { max: 20, timeWindow: 15 * MINUTE },
+  requestAccessIp: { max: 5, timeWindow: HOUR },
+  requestAccessEmailDay: { max: 3, timeWindow: DAY },
 } as const;
 
 export function makeLimiter(app: FastifyInstance, name: keyof typeof LIMITS, key: (req: FastifyRequest) => string) {

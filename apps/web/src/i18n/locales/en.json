@@ -24,7 +24,7 @@
     "emailPlaceholder": "name@qu.edu.qa",
     "send": "Send code",
     "sending": "Sending code…",
-    "noAccount": "No account? Ask a chapter admin to add you.",
+    "noAccount": "No account?",
     "invalidEmail": "Enter a full email address, like name@qu.edu.qa.",
     "network": "We couldn't reach the server. Check your connection and try again.",
     "rateLimited": "Too many requests from this address. Try again in {minutes, plural, one {# minute} other {# minutes}}.",
@@ -44,7 +44,16 @@
     "signedIn": "Signed in",
     "welcome": "Welcome back",
     "redirecting": "Taking you to where you were going.",
-    "continue": "Continue to the Library"
+    "continue": "Continue to the Library",
+    "requestAccess": "Request access",
+    "requestTitle": "Request access",
+    "requestIntro": "Tell us who you are. A chapter admin reviews every request.",
+    "requestRequired": "Add your name and choose a gender.",
+    "requestSend": "Send request",
+    "requestSent": "Request sent",
+    "requestThanks": "Thanks",
+    "requestReview": "An admin will review your request. If it's approved, you'll get an email with a link to sign in.",
+    "backToSignIn": "Back to sign in"
   },
   "states": {
     "sessionTitle": "Your session ended",
@@ -121,11 +130,11 @@
     "unsupported_type": "That file type isn't supported.",
     "too_large": "That file is too large.",
     "internal": "Something went wrong on our side.",
-    "network": "We couldn't reach the server. Check your connection and try again."
+    "network": "We couldn't reach the server. Check your connection and try again.",
+    "profile_incomplete": "Add your name and gender to your profile first."
   },
   "event": {
     "backToLibrary": "Library",
-    "coverLabel": "Cover photo, {title}",
     "edit": "Edit event",
     "addMedia": "Add media",
     "show": "Show",
@@ -334,9 +343,7 @@
     "alt": "Photo from {event}, {date}",
     "notReady": "This item is still being processed.",
     "originalOnly": "Only the original file is available for this item.",
-    "dims": "{w} × {h}",
-    "useAsCover": "Use as event cover",
-    "isCover": "This is the event cover"
+    "dims": "{w} × {h}"
   },
   "player": {
     "close": "Close player",
@@ -395,7 +402,7 @@
     "m_added": "{n, plural, one {# member added} other {# members added}}",
     "m_bulkTitle": "Add members from a list",
     "m_emails": "Emails",
-    "m_bulkHelp": "Separate with commas, spaces or new lines. Names can be added later.",
+    "m_bulkHelp": "Separate with commas, spaces or new lines. Each person adds their name and gender when they first sign in.",
     "m_preview": "Preview",
     "m_new": "{n} new",
     "m_newNote": "will be added",
@@ -583,6 +590,27 @@
     "s_curveGatePassed": "Validation passed on the server.",
     "s_curveGatePending": "Validation hasn't run yet — selection still works.",
     "s_curveOn": "On. Each HDR video's curve is chosen from quality scores.",
-    "i_stored": "Stored"
+    "i_stored": "Stored",
+    "m_colGender": "Gender",
+    "m_tabMembers": "Members",
+    "m_tabRequests": "Requests",
+    "m_colRequested": "Requested",
+    "m_approve": "Approve",
+    "m_reject": "Reject",
+    "m_rejectTitle": "Reject {name}'s request?",
+    "m_rejectBody": "They won't be told. They can send a new request later.",
+    "m_noRequests": "No requests waiting."
+  },
+  "gender": {
+    "label": "Gender",
+    "male": "Male",
+    "female": "Female",
+    "unset": "Not set"
+  },
+  "welcome": {
+    "title": "Welcome",
+    "intro": "Before you start, tell us your name and gender. You can change them later on your Account page.",
+    "required": "Add your name and choose a gender to continue.",
+    "continue": "Continue"
   }
 }

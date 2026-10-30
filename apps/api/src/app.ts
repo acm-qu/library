@@ -95,7 +95,7 @@ export async function buildApp(deps: AppDeps) {
   assetRoutes(app, { db });
   uploadRoutes(app, { db, cfg });
   mediaRoutes(app, { db, cfg });
-  adminRoutes(app, { db, cfg });
+  adminRoutes(app, { db, cfg, mailer });
   healthRoutes(app, { db, cfg });
 
   const web = cfg.WEB_ROOT && existsSync(cfg.WEB_ROOT) ? cfg.WEB_ROOT : null;

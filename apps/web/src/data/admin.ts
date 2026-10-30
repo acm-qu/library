@@ -10,6 +10,14 @@ export const useUsers = (f: api.UserFilter) =>
     placeholderData: keepPreviousData,
   });
 
+export const useAccessRequests = () =>
+  useInfiniteQuery({
+    queryKey: ['admin', 'access-requests'],
+    queryFn: ({ pageParam }) => api.getAccessRequests(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (p) => p.nextCursor ?? undefined,
+  });
+
 /** The queue polls every 15 s while anything is running or waiting. */
 export const useJobs = (tab: api.JobTab) =>
   useQuery({

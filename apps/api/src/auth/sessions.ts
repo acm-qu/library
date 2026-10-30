@@ -47,6 +47,7 @@ export async function lookupSession(db: Db, token: string | undefined, now = new
       role: users.role,
       isAdmin: users.isAdmin,
       status: users.status,
+      gender: users.gender,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))

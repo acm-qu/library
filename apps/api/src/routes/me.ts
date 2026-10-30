@@ -8,8 +8,8 @@ export function meRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/api/me', { preHandler: requireUser }, async (req) => Me.parse(viewerOf(req)));
 
   app.patch('/api/me', { preHandler: requireUser }, async (req) => {
-    const { name } = PatchMeBody.parse(req.body);
-    const [u] = await db.update(users).set({ name }).where(eq(users.id, viewerOf(req).id)).returning();
+    const body = PatchMeBody.parse(req.body);
+    const [u] = await db.update(users).set(body).where(eq(users.id, viewerOf(req).id)).returning();
     return Me.parse(u);
   });
 }

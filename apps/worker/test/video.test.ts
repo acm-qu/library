@@ -140,7 +140,7 @@ describe('HLS routes', () => {
     const { createSession } = await import('../../api/src/auth/sessions.ts');
     const id = await queuedVideo(`${fx}/land.mp4`);
     await runUntil(ctx);
-    const app = await buildApp({ cfg: ctx.cfg, db, logger: false, mailer: { sendSignInCode: async () => {} } });
+    const app = await buildApp({ cfg: ctx.cfg, db, logger: false, mailer: { sendSignInCode: async () => {}, sendApproved: async () => {} } });
     const m = await addUser('m@x.qa', { role: 'member' });
     const sid = (await createSession(db, m.id, { ip: null, userAgent: null })).token;
     const get = (url: string, headers: Record<string, string> = {}) => app.inject({ method: 'GET', url, headers, cookies: { sid } });

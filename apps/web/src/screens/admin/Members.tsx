@@ -1,18 +1,21 @@
-// Admin · Members: list with search and filters, add one, paste a list, admin/status with confirmations.
+// Admin · Members: list with search and filters, add one, paste a list, admin/status with confirmations, and the
+// Requests tab ("Request access" from the sign-in screen) with approve / reject.
 // Every account is core; admin is the only difference (signed-out visitors already see everything public).
-import type { AdminUser } from '@acm/core/schemas';
+import type { AdminAccessRequest, AdminUser, Gender } from '@acm/core/schemas';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as api from '../../api/admin.ts';
 import { ApiError } from '../../api/client.ts';
-import { useAdminMutation, useUsers } from '../../data/admin.ts';
+import { useAccessRequests, useAdminMutation, useUsers } from '../../data/admin.ts';
 import { useMe } from '../../data/session.ts';
 import { fmtDateTime } from '../../i18n/format.ts';
+import { GenderRadio } from '../../ui/GenderRadio.tsx';
 import { initials } from '../../routes/AppShell.tsx';
 import { Confirm } from '../../ui/Confirm.tsx';
 import { Icon } from '../../ui/Icon.tsx';
 import { Rich } from '../../ui/Rich.tsx';
 import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
+import { useTabIndicator } from '../../ui/useTabIndicator.ts';
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 type Pending = { kind: 'disable'; user: AdminUser } | null;
@@ -29,6 +32,9 @@ export function MembersScreen() {
   const [panel, setPanel] = useState<'none' | 'single' | 'bulk'>('none');
   const [pending, setPending] = useState<Pending>(null);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<'members' | 'requests'>('members');
+  const tabs = useTabIndicator<HTMLDivElement>('line-bottom', view);
+  const requestCount = useAccessRequests().data?.pages[0]?.pending;
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(search.trim()), 250);
     return () => clearTimeout(timer);
@@ -70,6 +76,21 @@ export function MembersScreen() {
       {panel === 'single' && <AddOne onClose={() => setPanel('none')} />}
       {panel === 'bulk' && <AddMany onClose={() => setPanel('none')} />}
 
+      <div ref={tabs} className="tabs" role="tablist" aria-label={t('admin.members')}>
+        <button className="tab" role="tab" aria-selected={view === 'members'} onClick={() => setView('members')}>
+          {t('admin.m_tabMembers')}
+        </button>
+        <button className="tab" role="tab" aria-selected={view === 'requests'} onClick={() => setView('requests')}>
+          {t('admin.m_tabRequests')}
+          {!!requestCount && <span className="count">{requestCount}</span>}
+        </button>
+      </div>
+
+      {view === 'requests' ? (
+        <Requests />
+      ) : (
+        <>
+
       <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
         <label className="search" style={{ flex: '1 1 260px', height: 40 }}>
           <Icon name="search" />
@@ -103,6 +124,7 @@ export function MembersScreen() {
           <thead>
             <tr>
               <th>{t('admin.m_colName')}</th>
+              <th>{t('admin.m_colGender')}</th>
               <th>{t('admin.m_colRole')}</th>
               <th>{t('admin.m_colAdmin')}</th>
               <th>{t('admin.m_colStatus')}</th>
@@ -113,7 +135,7 @@ export function MembersScreen() {
             </tr>
           </thead>
           <tbody>
-            {users.isPending && <SkeletonRows rows={6} cols={6} />}
+            {users.isPending && <SkeletonRows rows={6} cols={7} />}
             {all.map((u) => (
               <tr key={u.id}>
                 <td>
@@ -125,6 +147,7 @@ export function MembersScreen() {
                     </div>
                   </div>
                 </td>
+                <td>{u.gender ? t(`gender.${u.gender}`) : <span className="muted">{t('gender.unset')}</span>}</td>
                 <td>
                   {u.isAdmin ? (
                     <span className="tier">
@@ -173,13 +196,96 @@ export function MembersScreen() {
           {t('admin.m_more')}
         </button>
       )}
+        </>
+      )}
     </>
+  );
+}
+
+function Requests() {
+  const { t } = useTranslation();
+  const q = useAccessRequests();
+  const [rejecting, setRejecting] = useState<AdminAccessRequest | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const decide = useAdminMutation((id: string, a: 'approve' | 'reject') => api.decideAccessRequest(id, a));
+  const items = (q.data?.pages.flatMap((p) => p.items) ?? []).filter((r) => r.status === 'pending');
+  const act = async (r: AdminAccessRequest, a: 'approve' | 'reject') => {
+    setError(null);
+    try {
+      await decide.mutateAsync([r.id, a]);
+    } catch (e) {
+      setError(e instanceof ApiError && e.code === 'conflict' ? t('admin.m_exists') : t('errors.internal'));
+    }
+    setRejecting(null);
+  };
+  return (
+    <div role="tabpanel" className="stack" style={{ gap: 12 }} aria-busy={q.isPending || undefined} aria-label={q.isPending ? t('states.loading') : undefined}>
+      {rejecting && (
+        <Confirm danger title={t('admin.m_rejectTitle', { name: rejecting.name })} confirm={t('admin.m_reject')} cancel={t('admin.m_cancel')} onCancel={() => setRejecting(null)} onConfirm={() => void act(rejecting, 'reject')} busy={decide.isPending}>
+          {t('admin.m_rejectBody')}
+        </Confirm>
+      )}
+      {error && (
+        <div className="st st-w" role="alert" style={{ height: 'auto', padding: '12px 14px', fontWeight: 500 }}>
+          <Icon name="alert" />
+          {error}
+        </div>
+      )}
+      {!q.isPending && !items.length ? (
+        <p className="t-body muted">{t('admin.m_noRequests')}</p>
+      ) : (
+        <div className="card scroll-x">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>{t('admin.m_colName')}</th>
+                <th>{t('admin.m_colGender')}</th>
+                <th>{t('admin.m_colRequested')}</th>
+                <th>
+                  <span className="vh">{t('admin.m_colActions')}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.isPending && <SkeletonRows rows={3} cols={4} />}
+              {items.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <div className="stack" style={{ minWidth: 0 }}>
+                      <span style={{ fontWeight: 600 }}>{r.name}</span>
+                      <bdi className="t-sm muted">{r.email}</bdi>
+                    </div>
+                  </td>
+                  <td>{t(`gender.${r.gender}`)}</td>
+                  <td className="tnum t-sm muted">{fmtDateTime(r.createdAt)}</td>
+                  <td>
+                    <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
+                      <button className="btn btn-g btn-sm" style={{ color: 'var(--danger)' }} disabled={decide.isPending} onClick={() => setRejecting(r)}>
+                        {t('admin.m_reject')}
+                      </button>
+                      <button className="btn btn-p btn-sm" disabled={decide.isPending} onClick={() => void act(r, 'approve')}>
+                        {t('admin.m_approve')}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {q.hasNextPage && (
+        <button className="btn btn-s" style={{ alignSelf: 'center' }} onClick={() => void q.fetchNextPage()}>
+          {t('admin.m_more')}
+        </button>
+      )}
+    </div>
   );
 }
 
 function AddOne({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
-  const [f, setF] = useState({ email: '', name: '', isAdmin: false });
+  const [f, setF] = useState({ email: '', name: '', gender: null as Gender | null, isAdmin: false });
   const [err, setErr] = useState<string | null>(null);
   const add = useAdminMutation((b: typeof f) => api.createUser(b));
   const submit = async () => {
@@ -224,6 +330,7 @@ function AddOne({ onClose }: { onClose: () => void }) {
           </select>
         </div>
       </div>
+      <GenderRadio id="ag" value={f.gender} onChange={(gender) => setF({ ...f, gender })} />
       {err && (
         <span className="err" role="alert">
           <Icon name="alert" size="sm" style={{ marginTop: 3 }} />

@@ -20,3 +20,16 @@ export function signInCodeMail(code: string, origin: string) {
 </table></body></html>`,
   };
 }
+
+export function approvedMail(origin: string) {
+  const url = `${origin}/login`;
+  return {
+    subject: "You've been approved for ACM Library",
+    text: `You've been approved for ACM Library — sign in at ${url}`,
+    html: `<!doctype html><html><body style="margin:0;padding:32px 16px;background:#f4f1ea;font-family:Helvetica,Arial,sans-serif;color:#1c1a17">
+<table role="presentation" width="100%" style="max-width:480px;margin:0 auto;background:#fbf9f4;border:1px solid #d8d2c4">
+<tr><td style="padding:28px 28px 8px;font-family:Georgia,serif;font-size:20px">ACM Library</td></tr>
+<tr><td style="padding:8px 28px 28px">You've been approved for ACM Library — sign in at <a href="${esc(url)}" style="color:#1c1a17">${esc(url)}</a></td></tr>
+</table></body></html>`,
+  };
+}

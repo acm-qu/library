@@ -23,10 +23,10 @@ body { margin: 0; min-height: 100vh; }
   .app .login-title { font-family: var(--f-display); font-size: 28px; line-height: 34px; letter-spacing: -0.015em; }
   .app .login-body { align-items: flex-start !important; padding-top: 8px !important; }
 }
-.app { --cover-h: 280px; --gutter: 32px; }
+.app { --gutter: 32px; }
 .app .event-title { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
-  .app { --cover-h: 200px; --gutter: 16px; }
+  .app { --gutter: 16px; }
   .app .t-display.event-title { font-size: 32px; line-height: 38px; }
 }
 /* Phone tab bar (phone boards): fixed, 72px, current tab marked with the accent top border. */

@@ -1,7 +1,8 @@
 // App chrome for everyone (signed in or not): top bar from the Library board, offline banner, session-expired dialog.
+import { profileComplete } from '@acm/core/schemas';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Location, Link, matchPath, Outlet, useLocation, useNavigate, useRoutes } from 'react-router';
+import { type Location, Link, matchPath, Navigate, Outlet, useLocation, useNavigate, useRoutes } from 'react-router';
 import { ApiError, onSessionExpired } from '../api/client.ts';
 import { useMe } from '../data/session.ts';
 import { toggleTheme, useTheme } from '../lib/theme.ts';
@@ -40,6 +41,8 @@ export function AppShell() {
   if (me.isPending) return <ShellSkeleton />;
   if (me.isError) return <ServerError reference={me.error instanceof ApiError ? me.error.body.reference : undefined} onRetry={() => void me.refetch()} />;
   const user = me.data;
+  // Signed-in people finish their profile (name, gender) before anything else; visitors are unaffected.
+  if (user && !profileComplete(user) && loc.pathname !== '/welcome') return <Navigate to={`/welcome?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
   const isCore = user?.role === 'core';
   const signIn = `/login?next=${encodeURIComponent(loc.pathname + loc.search)}`;
   const section = /^\/uploads/.test(loc.pathname) ? 'uploads' : /^\/admin/.test(loc.pathname) ? 'admin' : /^\/(account|upload)\b/.test(loc.pathname) ? null : 'library';

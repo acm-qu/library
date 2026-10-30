@@ -4,7 +4,7 @@ import { type AssetDetail, AssetListQuery, Id, PatchAssetBody, type Viewer } fro
 import { and, asc, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { readerOf, requireAdmin, requireUser, viewerOf } from '../auth/plugin.ts';
+import { readerOf, requireAdmin, requireCore, viewerOf } from '../auth/plugin.ts';
 import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { downloadName, mediaUrl, toTile } from '../lib/dto.ts';
@@ -92,7 +92,7 @@ export function assetRoutes(app: FastifyInstance, { db }: { db: Db }) {
     };
   });
 
-  app.patch('/api/assets/:id', { preHandler: requireUser }, async (req) => {
+  app.patch('/api/assets/:id', { preHandler: requireCore }, async (req) => {
     const v = viewerOf(req);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const body = PatchAssetBody.parse(req.body);

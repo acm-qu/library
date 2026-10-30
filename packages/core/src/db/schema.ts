@@ -22,9 +22,11 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import {
+  ACCESS_REQUEST_STATUSES,
   ASSET_KINDS,
   ASSET_STATUSES,
   CURVE_SOURCES,
+  GENDERS,
   HDR_FORMATS,
   JOB_KINDS,
   JOB_OUTCOMES,
@@ -54,6 +56,8 @@ export const users = pgTable(
     role: text('role', { enum: ROLES }).notNull().default('member'),
     isAdmin: boolean('is_admin').notNull().default(false),
     status: text('status', { enum: USER_STATUSES }).notNull().default('active'),
+    // Null until the person completes their profile on first sign-in (or an admin sets it).
+    gender: text('gender', { enum: GENDERS }),
     createdBy: uuid('created_by'),
     createdAt: created(),
     lastLoginAt: ts('last_login_at'),
@@ -64,6 +68,29 @@ export const users = pgTable(
     check('users_role_check', inList('role', ROLES)),
     check('users_status_check', inList('status', USER_STATUSES)),
     check('admin_is_core', sql`not ${t.isAdmin} or ${t.role} = 'core'`),
+    check('users_gender_check', inList('gender', GENDERS)),
+  ],
+);
+
+/** "Request access" from the sign-in screen; an admin approves (creating the account) or rejects. */
+export const accessRequests = pgTable(
+  'access_requests',
+  {
+    id: uuid('id').primaryKey(),
+    email: text('email').notNull(),
+    name: text('name').notNull(),
+    gender: text('gender', { enum: GENDERS }).notNull(),
+    status: text('status', { enum: ACCESS_REQUEST_STATUSES }).notNull().default('pending'),
+    createdAt: created(),
+    decidedAt: ts('decided_at'),
+    decidedBy: uuid('decided_by').references(() => users.id, { onDelete: 'set null' }),
+    requestIp: inet('request_ip'),
+  },
+  (t) => [
+    uniqueIndex('access_requests_pending_email').on(t.email).where(sql`${t.status} = 'pending'`),
+    check('access_requests_email_lower', sql`${t.email} = lower(${t.email})`),
+    check('access_requests_gender_check', inList('gender', GENDERS)),
+    check('access_requests_status_check', inList('status', ACCESS_REQUEST_STATUSES)),
   ],
 );
 
@@ -281,6 +308,7 @@ export const appSettings = pgTable('app_settings', {
 });
 
 export type User = typeof users.$inferSelect;
+export type AccessRequest = typeof accessRequests.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type Asset = typeof assets.$inferSelect;
 export type Rendition = typeof renditions.$inferSelect;

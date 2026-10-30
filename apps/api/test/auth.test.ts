@@ -1,4 +1,4 @@
-import { otpCodes, sessions, users } from '@acm/core/db';
+import { accessRequests, otpCodes, sessions, users } from '@acm/core/db';
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
@@ -64,7 +64,7 @@ describe('request-code', () => {
   });
 
   it('pads to the timing floor', async () => {
-    const app = await buildApp({ cfg: testConfig(), db, mailer: { sendSignInCode: async () => {} }, logger: false });
+    const app = await buildApp({ cfg: testConfig(), db, mailer: { sendSignInCode: async () => {}, sendApproved: async () => {} }, logger: false });
     const start = performance.now();
     await app.inject({ method: 'POST', url: '/api/auth/request-code', headers: H, payload: { email: 'x@qu.edu.qa' } });
     expect(performance.now() - start).toBeGreaterThanOrEqual(340);
@@ -90,7 +90,7 @@ describe('verify', () => {
     await request('sara@qu.edu.qa');
     const res = await verify('sara@qu.edu.qa', (await t.lastCode())!);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ id: expect.any(String), email: 'sara@qu.edu.qa', name: 'sara', role: 'core', isAdmin: false });
+    expect(res.json()).toEqual({ id: expect.any(String), email: 'sara@qu.edu.qa', name: 'sara', role: 'core', isAdmin: false, gender: 'female' });
     const c = res.cookies.find((x) => x.name === 'sid')!;
     expect(c).toMatchObject({ httpOnly: true, sameSite: 'Lax', path: '/' });
     expect((await me(c.value)).json().email).toBe('sara@qu.edu.qa');
@@ -185,11 +185,71 @@ describe('sessions', () => {
     expect((await me(b)).statusCode).toBe(401);
   });
 
-  it('PATCH /me renames the user', async () => {
+  it('PATCH /me sets name and gender, and validates both', async () => {
     await addUser('sara@qu.edu.qa');
     const c = await signIn('sara@qu.edu.qa');
-    const res = await t.app.inject({ method: 'PATCH', url: '/api/me', headers: H, cookies: { sid: c }, payload: { name: '  Sara A.  ' } });
-    expect(res.json().name).toBe('Sara A.');
+    const patch = (payload: object) => t.app.inject({ method: 'PATCH', url: '/api/me', headers: H, cookies: { sid: c }, payload });
+    expect((await patch({ name: '  Sara A.  ', gender: 'female' })).json()).toMatchObject({ name: 'Sara A.', gender: 'female' });
+    for (const bad of [{ name: 'Sara' }, { name: ' ', gender: 'female' }, { name: 'Sara', gender: 'other' }]) expect((await patch(bad)).statusCode).toBe(400);
+  });
+});
+
+describe('profile completion', () => {
+  it('blocks core routes with 409 until name and gender are set; /me, auth and public reads still work', async () => {
+    await addUser('new@qu.edu.qa', { name: '', gender: null });
+    const c = await signIn('new@qu.edu.qa');
+    expect((await me(c)).json()).toMatchObject({ name: '', gender: null });
+    const mine = () => t.app.inject({ method: 'GET', url: '/api/uploads/mine', cookies: { sid: c } });
+    expect((await mine()).statusCode).toBe(409);
+    expect((await mine()).json().error).toBe('profile_incomplete');
+    expect((await t.app.inject({ method: 'POST', url: '/api/events', headers: H, cookies: { sid: c }, payload: { title: 'X', startsOn: '2026-10-10' } })).json().error).toBe('profile_incomplete');
+    expect((await t.app.inject({ method: 'GET', url: '/api/events', cookies: { sid: c } })).statusCode).toBe(200);
+    await t.app.inject({ method: 'PATCH', url: '/api/me', headers: H, cookies: { sid: c }, payload: { name: 'New', gender: 'male' } });
+    expect((await mine()).statusCode).toBe(200);
+    expect((await t.app.inject({ method: 'POST', url: '/api/auth/logout', headers: H, cookies: { sid: c } })).statusCode).toBe(204);
+  });
+
+  it('applies to admins too', async () => {
+    await addUser('boss@qu.edu.qa', { isAdmin: true, gender: null });
+    const c = await signIn('boss@qu.edu.qa');
+    expect((await t.app.inject({ method: 'GET', url: '/api/admin/users', cookies: { sid: c } })).json().error).toBe('profile_incomplete');
+  });
+});
+
+describe('request-access', () => {
+  const ask = (email: string, ip = '10.0.0.1', payload: object = { email, name: 'Huda', gender: 'female' }) =>
+    t.app.inject({ method: 'POST', url: '/api/auth/request-access', headers: { ...H, 'x-forwarded-for': ip }, remoteAddress: '127.0.0.1', payload });
+
+  it('answers 204 for new, existing and pending emails, but stores only the new one once', async () => {
+    await addUser('sara@qu.edu.qa');
+    expect((await ask('Huda@QU.edu.qa ')).statusCode).toBe(204);
+    expect((await ask('huda@qu.edu.qa', '10.0.0.2')).statusCode).toBe(204);
+    expect((await ask('sara@qu.edu.qa', '10.0.0.3')).statusCode).toBe(204);
+    const rows = await db.select().from(accessRequests);
+    expect(rows.map((r) => [r.email, r.name, r.gender, r.status])).toEqual([['huda@qu.edu.qa', 'Huda', 'female', 'pending']]);
+    expect(t.sent).toEqual([]);
+  });
+
+  it('validates the body and requires the CSRF header', async () => {
+    expect((await ask('a@qu.edu.qa', '10.0.0.1', { email: 'a@qu.edu.qa', name: '', gender: 'female' })).statusCode).toBe(400);
+    expect((await ask('a@qu.edu.qa', '10.0.0.1', { email: 'a@qu.edu.qa', name: 'A', gender: 'x' })).statusCode).toBe(400);
+    const res = await t.app.inject({ method: 'POST', url: '/api/auth/request-access', payload: { email: 'a@qu.edu.qa', name: 'A', gender: 'male' } });
+    expect(res.json().error).toBe('csrf');
+  });
+
+  it('limits 5 per IP per hour and 3 per email per day', async () => {
+    for (let i = 0; i < 5; i++) expect((await ask(`r${i}@qu.edu.qa`, '10.5.5.5')).statusCode).toBe(204);
+    expect((await ask('r5@qu.edu.qa', '10.5.5.5')).statusCode).toBe(429);
+    for (let i = 0; i < 3; i++) expect((await ask('same@qu.edu.qa', `10.6.0.${i}`)).statusCode).toBe(204);
+    expect((await ask('same@qu.edu.qa', '10.6.0.9')).statusCode).toBe(429);
+  });
+
+  it('pads to the timing floor', async () => {
+    const app = await buildApp({ cfg: testConfig(), db, mailer: { sendSignInCode: async () => {}, sendApproved: async () => {} }, logger: false });
+    const start = performance.now();
+    await app.inject({ method: 'POST', url: '/api/auth/request-access', headers: H, payload: { email: 'x@qu.edu.qa', name: 'X', gender: 'male' } });
+    expect(performance.now() - start).toBeGreaterThanOrEqual(340);
+    await app.close();
   });
 });
 
@@ -240,7 +300,7 @@ describe('web app serving', () => {
     await mkdir(`${dir}/assets`);
     await writeFile(`${dir}/index.html`, '<!doctype html><title>x</title>');
     await writeFile(`${dir}/assets/app-1.js`, 'console.log(1)');
-    const app = await buildApp({ cfg: { ...testConfig(), WEB_ROOT: dir }, db, mailer: { sendSignInCode: async () => {} }, logger: false });
+    const app = await buildApp({ cfg: { ...testConfig(), WEB_ROOT: dir }, db, mailer: { sendSignInCode: async () => {}, sendApproved: async () => {} }, logger: false });
     const page = await app.inject({ method: 'GET', url: '/events/2026-10-17-hackathon-day-1?kind=video' });
     expect([page.statusCode, page.headers['content-type']]).toEqual([200, 'text/html; charset=utf-8']);
     await writeFile(`${dir}/assets/app-2.js`, 'console.log(2)'); // added after start, like a rebuild

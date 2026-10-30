@@ -26,14 +26,16 @@ export { db };
 afterAll(() => pool.end());
 
 export async function resetDb() {
-  await db.execute(sql`truncate users, otp_codes, sessions, events, assets, renditions, processing_runs, jobs, asset_keys, audit_log, app_settings cascade`);
+  await db.execute(sql`truncate users, access_requests, otp_codes, sessions, events, assets, renditions, processing_runs, jobs, asset_keys, audit_log, app_settings cascade`);
 }
 
 export function useApp(over: Partial<Record<string, string>> = {}) {
   const sent: { to: string; code: string }[] = [];
-  const mailer: Mailer = { sendSignInCode: async (to, code) => void sent.push({ to, code }) };
+  const approved: string[] = [];
+  const mailer: Mailer = { sendSignInCode: async (to, code) => void sent.push({ to, code }), sendApproved: async (to) => void approved.push(to) };
   const ctx = {
     sent,
+    approved,
     app: null as unknown as Awaited<ReturnType<typeof buildApp>>,
     async lastCode() {
       await new Promise((r) => setImmediate(r)); // mail is sent after the response
@@ -43,6 +45,7 @@ export function useApp(over: Partial<Record<string, string>> = {}) {
   beforeEach(async () => {
     await resetDb();
     sent.length = 0;
+    approved.length = 0;
     await ctx.app?.close();
     ctx.app = await buildApp({ cfg: testConfig(over), db, mailer, logger: false, requestCodeFloorMs: 0 });
   });
@@ -51,7 +54,7 @@ export function useApp(over: Partial<Record<string, string>> = {}) {
 }
 
 export async function addUser(email: string, opts: Partial<typeof users.$inferInsert> = {}) {
-  const [u] = await db.insert(users).values({ id: newId(), email, name: email.split('@')[0]!, role: 'core', ...opts }).returning();
+  const [u] = await db.insert(users).values({ id: newId(), email, name: email.split('@')[0]!, role: 'core', gender: 'female', ...opts }).returning();
   return u!;
 }
 

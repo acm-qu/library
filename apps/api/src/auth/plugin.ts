@@ -1,7 +1,7 @@
 // Resolves the session cookie to `req.viewer` and provides the role guards used by every route.
 import type { ServerConfig } from '@acm/core/config';
 import type { Db } from '@acm/core/db';
-import type { Viewer } from '@acm/core/schemas';
+import { profileComplete, type Viewer } from '@acm/core/schemas';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { HttpError, notFound } from '../lib/errors.ts';
 import { lookupSession, SESSION_COOKIE, SESSION_TTL } from './sessions.ts';
@@ -49,18 +49,20 @@ export async function requireUser(req: FastifyRequest, _reply: FastifyReply) {
 export async function requireCore(req: FastifyRequest, _reply: FastifyReply) {
   if (!req.viewer) throw new HttpError('unauthorized');
   if (req.viewer.role !== 'core') throw notFound();
+  if (!profileComplete(req.viewer)) throw new HttpError('profile_incomplete');
 }
 
 export async function requireAdmin(req: FastifyRequest, _reply: FastifyReply) {
   if (!req.viewer) throw new HttpError('unauthorized');
   if (!req.viewer.isAdmin) throw notFound();
+  if (!profileComplete(req.viewer)) throw new HttpError('profile_incomplete');
 }
 
 /** Signed-out visitors read like a member: everything member-tier is public, core stays 404. Matches no uploader. */
-export const ANON: Viewer = { id: '00000000-0000-0000-0000-000000000000', email: '', name: '', role: 'member', isAdmin: false, status: 'active' };
+export const ANON: Viewer = { id: '00000000-0000-0000-0000-000000000000', email: '', name: '', role: 'member', isAdmin: false, status: 'active', gender: null };
 
-/** For read-only routes open to everyone. */
-export const readerOf = (req: FastifyRequest): Viewer => req.viewer ?? ANON;
+/** For read-only routes open to everyone. Until their profile is complete, a signed-in person reads like a visitor. */
+export const readerOf = (req: FastifyRequest): Viewer => (req.viewer && profileComplete(req.viewer) ? req.viewer : ANON);
 
 export function viewerOf(req: FastifyRequest): Viewer {
   if (!req.viewer) throw new HttpError('unauthorized');

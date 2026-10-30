@@ -8,6 +8,7 @@ import { LibraryScreen } from '../screens/Library.tsx';
 import { MyUploadsScreen } from '../screens/MyUploads.tsx';
 import { NotFound } from '../screens/States.tsx';
 import { UploadScreen } from '../screens/Upload.tsx';
+import { WelcomeScreen } from '../screens/Welcome.tsx';
 import { ItemScreen } from '../screens/admin/Item.tsx';
 import { EventsScreen } from '../screens/admin/Events.tsx';
 import { AdminLayout } from '../screens/admin/Layout.tsx';
@@ -30,6 +31,7 @@ export const screenRoutes: RouteObject[] = [
   { index: true, element: <LibraryScreen /> },
   { path: 'events/:slug', element: <EventScreen /> },
   { path: 'account', element: <SignedIn><AccountScreen /></SignedIn> },
+  { path: 'welcome', element: <SignedIn><WelcomeScreen /></SignedIn> },
   { path: 'upload', element: <CoreOnly><UploadScreen /></CoreOnly> },
   { path: 'uploads', element: <CoreOnly><MyUploadsScreen /></CoreOnly> },
   {

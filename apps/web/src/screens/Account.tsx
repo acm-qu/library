@@ -1,16 +1,20 @@
-// Account board: profile name, display preferences, sign out / sign out everywhere.
+// Account board: profile name and gender, display preferences, sign out / sign out everywhere.
+import type { Gender } from '@acm/core/schemas';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { useLogout, useMe, usePatchMe } from '../data/session.ts';
 import { applyLocale, LOCALES } from '../i18n/index.ts';
 import { setTheme, type ThemePref, useTheme } from '../lib/theme.ts';
+import { GenderRadio } from '../ui/GenderRadio.tsx';
 import { Icon } from '../ui/Icon.tsx';
 
 export function AccountScreen() {
   const { t, i18n } = useTranslation();
   const me = useMe().data!;
   const [name, setName] = useState(me.name);
+  const [gender, setGender] = useState<Gender | null>(me.gender);
+  const unchanged = name.trim() === me.name && gender === me.gender;
   const patch = usePatchMe();
   const logout = useLogout(false);
   const logoutAll = useLogout(true);
@@ -34,29 +38,31 @@ export function AccountScreen() {
           {t('account.profile')}
         </h2>
         <form
-          className="field"
+          className="stack"
+          style={{ gap: 20 }}
           onSubmit={(e) => {
             e.preventDefault();
-            patch.mutate(name.trim());
+            if (name.trim() && gender) patch.mutate({ name: name.trim(), gender });
           }}
         >
-          <label className="label" htmlFor="nm">
-            {t('account.name')}
-          </label>
-          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <input className="input" id="nm" value={name} maxLength={120} autoComplete="name" onChange={(e) => setName(e.target.value)} style={{ flex: '1 1 260px' }} />
-            <button className="btn btn-s" type="submit" disabled={patch.isPending || name.trim() === me.name}>
-              {patch.isSuccess && name.trim() === me.name ? (
-                <>
-                  <Icon name="ok" />
-                  {t('account.saved')}
-                </>
-              ) : (
-                t('account.save')
-              )}
-            </button>
+          <div className="field">
+            <label className="label" htmlFor="nm">
+              {t('account.name')}
+            </label>
+            <input className="input" id="nm" value={name} maxLength={120} autoComplete="name" onChange={(e) => setName(e.target.value)} aria-invalid={!name.trim() || undefined} />
+            <span className="help">{t('account.nameHelp')}</span>
           </div>
-          <span className="help">{t('account.nameHelp')}</span>
+          <GenderRadio id="gd" value={gender} onChange={setGender} />
+          <button className="btn btn-s" type="submit" style={{ alignSelf: 'flex-start' }} disabled={patch.isPending || unchanged || !name.trim() || !gender}>
+            {patch.isSuccess && unchanged ? (
+              <>
+                <Icon name="ok" />
+                {t('account.saved')}
+              </>
+            ) : (
+              t('account.save')
+            )}
+          </button>
         </form>
         <div className="field">
           <span className="label">{t('account.email')}</span>

@@ -160,7 +160,7 @@ describe('tone curve choice', () => {
 
     const { buildApp } = await import('../../api/src/app.ts');
     const { createSession } = await import('../../api/src/auth/sessions.ts');
-    const app = await buildApp({ cfg: ctx.cfg, db, logger: false, mailer: { sendSignInCode: async () => {} } });
+    const app = await buildApp({ cfg: ctx.cfg, db, logger: false, mailer: { sendSignInCode: async () => {}, sendApproved: async () => {} } });
     const admin = await addUser('a@x.qa', { role: 'core', isAdmin: true });
     const core = await addUser('k@x.qa', { role: 'core' });
     const sid = async (u: { id: string }) => (await createSession(db, u.id, { ip: null, userAgent: null })).token;

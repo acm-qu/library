@@ -26,7 +26,7 @@ let app: Awaited<ReturnType<typeof buildApp>>;
 beforeAll(async () => {
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=1600x1200', '-frames:v', '1', `${fx}/p.jpg`]);
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '3', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', `${fx}/v.mp4`]);
-  app = await buildApp({ cfg, db, logger: false, mailer: { sendSignInCode: async () => {} } });
+  app = await buildApp({ cfg, db, logger: false, mailer: { sendSignInCode: async () => {}, sendApproved: async () => {} } });
 });
 afterAll(() => app.close());
 
@@ -143,7 +143,7 @@ describe('master key rotation', () => {
     const newKey = Buffer.alloc(32, 9).toString('base64');
     expect(await rotate(cfg.DATABASE_URL, cfg.MASTER_KEY, newKey)).toBe(1);
     expect((await get(`/api/media/${id}/thumb`, coreSid)).statusCode).toBe(500); // the running app still has the old key
-    const app2 = await buildApp({ cfg: { ...cfg, MASTER_KEY: newKey }, db, logger: false, mailer: { sendSignInCode: async () => {} } });
+    const app2 = await buildApp({ cfg: { ...cfg, MASTER_KEY: newKey }, db, logger: false, mailer: { sendSignInCode: async () => {}, sendApproved: async () => {} } });
     const r = await app2.inject({ method: 'GET', url: `/api/media/${id}/thumb`, cookies: { sid: coreSid } });
     expect(r.rawPayload.subarray(8, 12).toString()).toBe('WEBP');
     await app2.close();

@@ -7,6 +7,7 @@ export const ME_KEY = ['me'] as const;
 export const useMe = () => useQuery({ queryKey: ME_KEY, queryFn: api.getMe, staleTime: 5 * 60_000, retry: false });
 
 export const useRequestCode = () => useMutation({ mutationFn: (email: string) => api.requestCode(email) });
+export const useRequestAccess = () => useMutation({ mutationFn: api.requestAccess });
 
 export function useVerify() {
   const qc = useQueryClient();
@@ -29,5 +30,12 @@ export function useLogout(all = false) {
 
 export function usePatchMe() {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: api.patchMe, onSuccess: (me) => qc.setQueryData(ME_KEY, me) });
+  return useMutation({
+    mutationFn: api.patchMe,
+    onSuccess: (me) => {
+      qc.setQueryData(ME_KEY, me);
+      // Reads made before the profile was complete came back as a signed-out visitor's.
+      void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== ME_KEY[0] });
+    },
+  });
 }

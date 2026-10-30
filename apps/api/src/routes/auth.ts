@@ -1,6 +1,8 @@
 import type { ServerConfig } from '@acm/core/config';
-import type { Db } from '@acm/core/db';
-import { Me, RequestCodeBody, VerifyBody } from '@acm/core/schemas';
+import { accessRequests, type Db, users } from '@acm/core/db';
+import { newId } from '@acm/core/ids';
+import { Me, RequestAccessBody, RequestCodeBody, VerifyBody } from '@acm/core/schemas';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { issueCode, type OtpDeps, verifyCode } from '../auth/otp.ts';
 import { cookieOptions, requireUser, viewerOf } from '../auth/plugin.ts';
@@ -22,6 +24,8 @@ export function authRoutes(app: FastifyInstance, deps: { db: Db; cfg: ServerConf
   const perEmailDay = makeLimiter(app, 'requestCodeEmailDay', emailOf);
   const perIp = makeLimiter(app, 'requestCodeIp', (req) => req.ip);
   const verifyPerIp = makeLimiter(app, 'verifyIp', (req) => req.ip);
+  const accessPerIp = makeLimiter(app, 'requestAccessIp', (req) => req.ip);
+  const accessPerEmail = makeLimiter(app, 'requestAccessEmailDay', emailOf);
 
   app.post('/api/auth/request-code', async (req, reply) => {
     const { email } = RequestCodeBody.parse(req.body);
@@ -33,6 +37,22 @@ export function authRoutes(app: FastifyInstance, deps: { db: Db; cfg: ServerConf
       // After the response, so SMTP latency can't be timed either.
       setImmediate(() => mailer.sendSignInCode(email, issued.code).catch((err) => req.log.error({ err }, 'sign-in mail failed')));
     }
+    return reply.code(204).send();
+  });
+
+  // Same answer and timing floor for a new address, an existing account and a pending request.
+  app.post('/api/auth/request-access', async (req, reply) => {
+    const body = RequestAccessBody.parse(req.body);
+    await accessPerIp(req);
+    await accessPerEmail(req);
+    await withFloor(deps.floorMs ?? REQUEST_CODE_FLOOR_MS, async () => {
+      const [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, body.email));
+      if (user) return;
+      const [pending] = await db.select({ id: accessRequests.id }).from(accessRequests).where(and(eq(accessRequests.email, body.email), eq(accessRequests.status, 'pending')));
+      if (pending) return;
+      // The partial unique index settles a race between two identical requests.
+      await db.insert(accessRequests).values({ id: newId(), ...body, requestIp: req.ip }).onConflictDoNothing();
+    });
     return reply.code(204).send();
   });
 

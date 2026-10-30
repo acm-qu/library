@@ -5,7 +5,7 @@ import { statfs } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerConfig } from '@acm/core/config';
 import { parseMasterKey, unwrapKey } from '@acm/core/crypto';
-import { appSettings, assetKeys, assets, type Db, events, jobs, processingRuns, renditions, sessions, users } from '@acm/core/db';
+import { accessRequests, appSettings, assetKeys, assets, type Db, events, jobs, processingRuns, renditions, sessions, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { revDir, tonemapGatePath } from '@acm/core/paths';
 import {
@@ -15,6 +15,7 @@ import {
   CreateUserBody,
   Email,
   Id,
+  PageQuery,
   PatchSettingsBody,
   PatchUserBody,
   ReprocessBody,
@@ -30,6 +31,7 @@ import { thumbUrl } from '../lib/dto.ts';
 import { HttpError, notFound } from '../lib/errors.ts';
 import { computeUsage } from '../lib/compute.ts';
 import { activeJobs, drainOf, loadRho } from '../lib/queue.ts';
+import type { Mailer } from '../mail/mailer.ts';
 import { sendFile, sendSealed } from './media.ts';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
@@ -43,7 +45,7 @@ async function setting<T>(db: Db, key: string): Promise<T | null> {
 const putSetting = (db: Pick<Db, 'insert'>, key: string, value: unknown) =>
   db.insert(appSettings).values({ key, value }).onConflictDoUpdate({ target: appSettings.key, set: { value } });
 
-export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: ServerConfig }) {
+export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db; cfg: ServerConfig; mailer: Mailer }) {
   const gatePassed = () => existsSync(tonemapGatePath(cfg.LUTS_DIR));
   const master = parseMasterKey(cfg.MASTER_KEY);
 
@@ -74,7 +76,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
       })
       .from(users);
     return {
-      items: page.map(({ u }) => ({ id: u.id, email: u.email, name: u.name, role: u.role, isAdmin: u.isAdmin, status: u.status, createdAt: u.createdAt.toISOString(), lastLoginAt: iso(u.lastLoginAt) })),
+      items: page.map(({ u }) => ({ id: u.id, email: u.email, name: u.name, role: u.role, isAdmin: u.isAdmin, status: u.status, gender: u.gender, createdAt: u.createdAt.toISOString(), lastLoginAt: iso(u.lastLoginAt) })),
       nextCursor: rows.length > q.limit && last ? encodeCursor({ c: last.c, i: last.u.id }) : null,
       counts,
     };
@@ -91,6 +93,60 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
       await audit(tx, v.id, 'user.create', { type: 'user', id }, { email: body.email, isAdmin: body.isAdmin });
     });
     return reply.code(201).send({ id });
+  });
+
+  // ── Access requests (from "Request access" on the sign-in screen) ───────────────────────────────────
+  app.get('/api/admin/access-requests', { preHandler: requireAdmin }, async (req) => {
+    const q = PageQuery.parse(req.query);
+    const offset = decodeCursor(OffsetCursor, q.cursor)?.o ?? 0;
+    const rows = await db
+      .select()
+      .from(accessRequests)
+      .orderBy(sql`(${accessRequests.status} = 'pending') desc`, desc(accessRequests.createdAt), desc(accessRequests.id))
+      .limit(q.limit + 1)
+      .offset(offset);
+    const [{ pending } = { pending: 0 }] = await db.select({ pending: sql<number>`count(*)::int` }).from(accessRequests).where(eq(accessRequests.status, 'pending'));
+    return {
+      items: rows.slice(0, q.limit).map((r) => ({ id: r.id, email: r.email, name: r.name, gender: r.gender, status: r.status, createdAt: r.createdAt.toISOString(), decidedAt: iso(r.decidedAt) })),
+      nextCursor: rows.length > q.limit ? encodeCursor({ o: offset + q.limit }) : null,
+      pending,
+    };
+  });
+
+  app.post('/api/admin/access-requests/:id/approve', { preHandler: requireAdmin }, async (req) => {
+    const v = viewerOf(req);
+    const { id } = z.object({ id: Id }).parse(req.params);
+    const result = await db.transaction(async (tx) => {
+      const [r] = await tx.select().from(accessRequests).where(and(eq(accessRequests.id, id), eq(accessRequests.status, 'pending'))).for('update');
+      if (!r) return notFound();
+      const [exists] = await tx.select({ id: users.id }).from(users).where(eq(users.email, r.email));
+      if (exists) return new HttpError('conflict', { fields: { email: 'exists' } }, 'Someone with that email is already a member.');
+      const userId = newId();
+      await tx.insert(users).values({ id: userId, email: r.email, name: r.name, gender: r.gender, role: 'core', isAdmin: false, status: 'active', createdBy: v.id });
+      await tx.update(accessRequests).set({ status: 'approved', decidedAt: new Date(), decidedBy: v.id }).where(eq(accessRequests.id, r.id));
+      await audit(tx, v.id, 'access_request.approve', { type: 'user', id: userId }, { requestId: r.id });
+      return { userId, email: r.email };
+    });
+    if (result instanceof HttpError) throw result;
+    // After the response, like the sign-in code mail.
+    setImmediate(() => mailer.sendApproved(result.email).catch((err) => req.log.error({ err }, 'approval mail failed')));
+    return { ok: true, userId: result.userId };
+  });
+
+  app.post('/api/admin/access-requests/:id/reject', { preHandler: requireAdmin }, async (req) => {
+    const v = viewerOf(req);
+    const { id } = z.object({ id: Id }).parse(req.params);
+    const done = await db.transaction(async (tx) => {
+      const [r] = await tx
+        .update(accessRequests)
+        .set({ status: 'rejected', decidedAt: new Date(), decidedBy: v.id })
+        .where(and(eq(accessRequests.id, id), eq(accessRequests.status, 'pending')))
+        .returning({ id: accessRequests.id });
+      if (r) await audit(tx, v.id, 'access_request.reject', { type: 'access_request', id: r.id });
+      return !!r;
+    });
+    if (!done) throw notFound();
+    return { ok: true };
   });
 
   app.post('/api/admin/users/bulk', { preHandler: requireAdmin }, async (req) => {

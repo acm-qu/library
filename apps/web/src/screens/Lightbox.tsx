@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, type Location, useNavigate } from 'react-router';
-import { useAsset, useEvent, usePatchEvent } from '../data/library.ts';
+import { useAsset, useEvent } from '../data/library.ts';
 import { useMe } from '../data/session.ts';
 import { fmtBytes, fmtDate, fmtDateTime } from '../i18n/format.ts';
 import { Icon } from '../ui/Icon.tsx';
@@ -39,7 +39,6 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
   const asset = useAsset(assetId);
   const a = asset.data;
   const event = useEvent(a?.eventId ?? '');
-  const setCover = usePatchEvent();
   const { list, i } = useNeighbours(assetId);
   const [info, setInfo] = useState(() => matchMedia('(min-width: 761px)').matches);
   const [zoom, setZoom] = useState(false);
@@ -272,24 +271,6 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
                 <Icon name="download" />
                 {t('viewer.downloadOriginal', { format: a.originalFilename.split('.').pop()?.toUpperCase() ?? '', size: fmtBytes(a.originalSize ?? 0) })}
               </a>
-            )}
-            {me?.role === 'core' && a.kind === 'image' && a.status === 'ready' && event.data && (
-              event.data.coverAssetId === a.id ? (
-                <span className="t-sm muted row" style={{ gap: 6 }}>
-                  <Icon name="ok" size="sm" />
-                  {t('viewer.isCover')}
-                </span>
-              ) : (
-                <button className="btn btn-s btn-sm" style={{ alignSelf: 'flex-start' }} disabled={setCover.isPending} onClick={() => setCover.mutate({ id: event.data!.id, coverAssetId: a.id })}>
-                  {t('viewer.useAsCover')}
-                </button>
-              )
-            )}
-            {setCover.isError && (
-              <span className="err" role="alert">
-                <Icon name="alert" size="sm" style={{ marginTop: 3 }} />
-                {t('errors.internal')}
-              </span>
             )}
             {me?.isAdmin && (
               <>

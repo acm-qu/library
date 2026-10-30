@@ -3,6 +3,8 @@
 // Accounts are all 'core' (admin is a flag on top). 'member' stays for the DB CHECK, old rows and the signed-out viewer.
 export const ROLES = ['member', 'core'] as const;
 export const USER_STATUSES = ['active', 'disabled'] as const;
+export const GENDERS = ['male', 'female'] as const;
+export const ACCESS_REQUEST_STATUSES = ['pending', 'approved', 'rejected'] as const;
 export const TIERS = ['member', 'core'] as const;
 export const ASSET_KINDS = ['image', 'video'] as const;
 export const ASSET_STATUSES = [
@@ -32,6 +34,7 @@ export const TONE_CURVES = ['hable203', 'bt2446a', 'bt2390', 'reinhard203'] as c
 export const CURVE_SOURCES = ['auto', 'fallback', 'override', 'none'] as const;
 
 export type Role = (typeof ROLES)[number];
+export type Gender = (typeof GENDERS)[number];
 export type Tier = (typeof TIERS)[number];
 export type AssetKind = (typeof ASSET_KINDS)[number];
 export type AssetStatus = (typeof ASSET_STATUSES)[number];

@@ -1,4 +1,4 @@
-import { appSettings, assets, auditLog, events, jobs, sessions, users } from '@acm/core/db';
+import { accessRequests, appSettings, assets, auditLog, events, jobs, sessions, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { eq, inArray } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -37,11 +37,61 @@ describe('access', () => {
   });
 });
 
+describe('access requests', () => {
+  async function pending(email: string, name = 'Huda') {
+    const id = newId();
+    await db.insert(accessRequests).values({ id, email, name, gender: 'female' });
+    return id;
+  }
+
+  it('lists pending first and hides from non-admins', async () => {
+    const old = await pending('old@qu.edu.qa');
+    await db.update(accessRequests).set({ status: 'rejected' }).where(eq(accessRequests.id, old));
+    await pending('new@qu.edu.qa');
+    const r = (await call('GET', '/api/admin/access-requests', admin.sid)).json();
+    expect(r.items.map((x: { email: string; status: string }) => [x.email, x.status])).toEqual([['new@qu.edu.qa', 'pending'], ['old@qu.edu.qa', 'rejected']]);
+    expect(r.pending).toBe(1);
+    expect((await call('GET', '/api/admin/access-requests', core.sid)).statusCode).toBe(404);
+    expect((await call('POST', `/api/admin/access-requests/${old}/approve`, core.sid)).statusCode).toBe(404);
+  });
+
+  it('approve creates an active core user with the name and gender, audits and mails', async () => {
+    const id = await pending('huda@qu.edu.qa');
+    expect((await call('POST', `/api/admin/access-requests/${id}/approve`, admin.sid)).statusCode).toBe(200);
+    const [u] = await db.select().from(users).where(eq(users.email, 'huda@qu.edu.qa'));
+    expect(u).toMatchObject({ name: 'Huda', gender: 'female', role: 'core', isAdmin: false, status: 'active', createdBy: admin.id });
+    expect((await db.select().from(accessRequests))[0]).toMatchObject({ status: 'approved', decidedBy: admin.id });
+    expect((await db.select().from(auditLog).where(eq(auditLog.action, 'access_request.approve'))).length).toBe(1);
+    await new Promise((r) => setImmediate(r));
+    expect(t.approved).toEqual(['huda@qu.edu.qa']);
+    expect((await call('POST', `/api/admin/access-requests/${id}/approve`, admin.sid)).statusCode).toBe(404);
+  });
+
+  it('approve answers 409 when the email became a user meanwhile', async () => {
+    const id = await pending('late@qu.edu.qa');
+    await addUser('late@qu.edu.qa');
+    expect((await call('POST', `/api/admin/access-requests/${id}/approve`, admin.sid)).statusCode).toBe(409);
+    expect(t.approved).toEqual([]);
+  });
+
+  it('reject marks it rejected and audits; a second pending row for one email is refused by the index', async () => {
+    const id = await pending('no@qu.edu.qa');
+    await expect(pending('no@qu.edu.qa')).rejects.toThrow();
+    expect((await call('POST', `/api/admin/access-requests/${id}/reject`, admin.sid)).statusCode).toBe(200);
+    expect((await db.select().from(accessRequests))[0]).toMatchObject({ status: 'rejected', decidedBy: admin.id });
+    expect((await db.select().from(auditLog).where(eq(auditLog.action, 'access_request.reject'))).length).toBe(1);
+    expect((await call('POST', `/api/admin/access-requests/${id}/reject`, admin.sid)).statusCode).toBe(404);
+    await pending('no@qu.edu.qa'); // allowed again once the old one is decided
+  });
+});
+
 describe('members', () => {
   it('adds core accounts or admins (never members) and refuses duplicates', async () => {
     expect((await call('POST', '/api/admin/users', admin.sid, { email: 'New@QU.edu.qa', name: 'New', role: 'member' })).statusCode).toBe(201);
     expect((await call('POST', '/api/admin/users', admin.sid, { email: 'new@qu.edu.qa' })).statusCode).toBe(409);
-    expect((await call('POST', '/api/admin/users', admin.sid, { email: 'boss@qu.edu.qa', isAdmin: true })).statusCode).toBe(201);
+    expect((await call('POST', '/api/admin/users', admin.sid, { email: 'boss@qu.edu.qa', isAdmin: true, gender: 'male' })).statusCode).toBe(201);
+    expect((await call('POST', '/api/admin/users', admin.sid, { email: 'x@qu.edu.qa', gender: 'other' })).statusCode).toBe(400);
+    expect((await call('GET', '/api/admin/users?q=boss', admin.sid)).json().items[0].gender).toBe('male');
     const list = (await call('GET', '/api/admin/users?q=new', admin.sid)).json();
     expect(list.items.map((u: { email: string; role: string }) => [u.email, u.role])).toEqual([['new@qu.edu.qa', 'core']]);
     expect(list.counts).toMatchObject({ all: 4, core: 4, admins: 2 });

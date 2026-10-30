@@ -1,12 +1,14 @@
-// Login · email and code (desktop board "Login · email and code", phone board "Login").
+// Login · email and code (desktop board "Login · email and code", phone board "Login"), plus "Request access".
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client.ts';
-import { useRequestCode, useVerify } from '../data/session.ts';
+import type { Gender } from '@acm/core/schemas';
+import { useRequestAccess, useRequestCode, useVerify } from '../data/session.ts';
 import { safeNext } from '../lib/safeNext.ts';
 import { toggleTheme, useTheme } from '../lib/theme.ts';
 import { mmss, useCountdown } from '../lib/useCountdown.ts';
+import { GenderRadio } from '../ui/GenderRadio.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import { OtpInput } from '../ui/OtpInput.tsx';
 import { Rich } from '../ui/Rich.tsx';
@@ -20,7 +22,7 @@ export function LoginScreen() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const next = safeNext(params.get('next'));
-  const [step, setStep] = useState<'email' | 'code' | 'done'>('email');
+  const [step, setStep] = useState<'email' | 'code' | 'done' | 'request'>('email');
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState<'invalid' | 'network' | null>(null);
   const [rateUntil, setRateUntil] = useState<number | null>(null);
@@ -167,7 +169,16 @@ export function LoginScreen() {
                   )}
                 </form>
                 <p className="t-sm subtle" style={{ margin: 0 }}>
-                  {t('login.noAccount')}
+                  {t('login.noAccount')}{' '}
+                  <a
+                    href="#request"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setStep('request');
+                    }}
+                  >
+                    {t('login.requestAccess')}
+                  </a>
                 </p>
               </>
             )}
@@ -229,6 +240,8 @@ export function LoginScreen() {
               </>
             )}
 
+            {step === 'request' && <RequestAccess initialEmail={email} onBack={() => setStep('email')} />}
+
             {step === 'done' && (
               <div className="stack" style={{ gap: 18 }} aria-live="polite">
                 <span className="st st-ok" style={{ alignSelf: 'flex-start' }}>
@@ -246,6 +259,99 @@ export function LoginScreen() {
         </div>
       </main>
     </div>
+  );
+}
+
+/** Email, name and gender; the answer is the same whether or not the address already has an account or a request. */
+function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+  const { t } = useTranslation();
+  const [f, setF] = useState({ email: initialEmail, name: '' });
+  const [gender, setGender] = useState<Gender | null>(null);
+  const [error, setError] = useState<'invalid' | 'required' | 'rate' | 'network' | null>(null);
+  const [sent, setSent] = useState(false);
+  const req = useRequestAccess();
+  const back = (
+    <a
+      href="#email"
+      className="t-sm"
+      style={{ alignSelf: 'flex-start' }}
+      onClick={(e) => {
+        e.preventDefault();
+        onBack();
+      }}
+    >
+      {t('login.backToSignIn')}
+    </a>
+  );
+
+  async function submit() {
+    const email = f.email.trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) return setError('invalid');
+    if (!f.name.trim() || !gender) return setError('required');
+    setError(null);
+    try {
+      await req.mutateAsync({ email, name: f.name.trim(), gender });
+      setSent(true);
+    } catch (e) {
+      setError(e instanceof ApiError && e.code === 'rate_limited' ? 'rate' : e instanceof ApiError && e.code === 'bad_request' ? 'invalid' : 'network');
+    }
+  }
+
+  if (sent)
+    return (
+      <div className="stack" style={{ gap: 18 }} aria-live="polite">
+        <span className="st st-ok" style={{ alignSelf: 'flex-start' }}>
+          <Icon name="check" />
+          {t('login.requestSent')}
+        </span>
+        <h1 className="t-display login-title">{t('login.requestThanks')}</h1>
+        <p className="t-body muted">{t('login.requestReview')}</p>
+        {back}
+      </div>
+    );
+
+  const msg = { invalid: 'login.invalidEmail', required: 'login.requestRequired', rate: 'errors.rate_limited', network: 'login.network' } as const;
+  return (
+    <>
+      <div className="stack" style={{ gap: 10 }}>
+        <h1 className="t-display login-title">{t('login.requestTitle')}</h1>
+        <p className="t-body muted">{t('login.requestIntro')}</p>
+        {back}
+      </div>
+      <form
+        noValidate
+        className="stack"
+        style={{ gap: 18 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!req.isPending) void submit();
+        }}
+      >
+        <div className="field">
+          <label className="label" htmlFor="ra-e">
+            {t('login.email')}
+          </label>
+          <input className="input" id="ra-e" type="email" dir="ltr" autoComplete="email" spellCheck={false} placeholder={t('login.emailPlaceholder')} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} aria-invalid={error === 'invalid' || undefined} />
+        </div>
+        <div className="field">
+          <label className="label" htmlFor="ra-n">
+            {t('account.name')}
+          </label>
+          <input className="input" id="ra-n" autoComplete="name" maxLength={120} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-invalid={(error === 'required' && !f.name.trim()) || undefined} />
+        </div>
+        <GenderRadio id="ra-g" value={gender} onChange={setGender} invalid={error === 'required' && !gender} />
+        {error && (
+          <span className="err" role="alert">
+            <Icon name="alert" size="sm" style={{ marginTop: 3 }} />
+            {t(msg[error])}
+          </span>
+        )}
+        <button className="btn btn-p btn-block" type="submit" aria-disabled={req.isPending || undefined}>
+          {req.isPending && <Icon name="spinner" className="spin" />}
+          {t('login.requestSend')}
+        </button>
+      </form>
+    </>
   );
 }
 

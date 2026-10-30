@@ -1,4 +1,4 @@
-// Event page: cover, header, kind and tier filters, justified grid with status tiles.
+// Event page: back link, header, kind and tier filters, justified grid with status tiles.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -9,7 +9,7 @@ import { fmtDate } from '../i18n/format.ts';
 import { Icon } from '../ui/Icon.tsx';
 import { GridSkeleton, JustifiedGrid } from '../ui/JustifiedGrid.tsx';
 import { MediaTile } from '../ui/MediaTile.tsx';
-import { fadeIn, Skeleton } from '../ui/Skeleton.tsx';
+import { Skeleton } from '../ui/Skeleton.tsx';
 import { EventEditDialog } from './EventEdit.tsx';
 import { NotFound, ServerError } from './States.tsx';
 
@@ -41,14 +41,12 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
   if (ev.isPending)
     return (
       <>
-        <div className="skel" style={{ position: 'relative', height: 'var(--cover-h)' }}>
-          <Link to="/" className="btn btn-sm btn-on-media" style={{ position: 'absolute', top: 20, insetInlineStart: 'var(--gutter)' }}>
+        {/* Same boxes as the loaded header: back link, meta line, display title, count line, filter chips, then grid rows. */}
+        <main id="main" className="wrap stack" aria-busy="true" aria-label={t('states.loading')} style={{ flex: 1, paddingTop: 28, paddingBottom: 96, gap: 24 }}>
+          <Link to="/" className="btn btn-g btn-sm" style={{ alignSelf: 'flex-start' }}>
             <Icon name="back" className="flip" />
             {t('event.backToLibrary')}
           </Link>
-        </div>
-        {/* Same boxes as the loaded header: meta line, display title, count line, filter chips, then grid rows. */}
-        <main id="main" className="wrap stack" aria-busy="true" aria-label={t('states.loading')} style={{ flex: 1, paddingTop: 28, paddingBottom: 96, gap: 24 }}>
           <div className="stack" style={{ gap: 8 }}>
             <Skeleton h={20} w={220} />
             <Skeleton h={56} w={480} />
@@ -79,15 +77,11 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
 
   return (
     <>
-      <div role="img" aria-label={t('event.coverLabel', { title: e.title })} className={e.coverUrl ? 'skel' : undefined} style={{ position: 'relative', height: 'var(--cover-h)', background: e.coverUrl ? undefined : 'linear-gradient(160deg, #5F6B74, #2F353A)', overflow: 'hidden' }}>
-        {e.coverUrl && <img {...fadeIn} src={e.coverUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} onError={(x) => ((x.currentTarget.style.display = 'none'), (x.currentTarget.dataset.loaded = ''))} />}
-        <Link to="/" className="btn btn-sm btn-on-media" style={{ position: 'absolute', top: 20, insetInlineStart: 'var(--gutter)' }}>
+      <main id="main" className="wrap stack" style={{ flex: 1, paddingTop: 28, paddingBottom: 96, gap: 24 }}>
+        <Link to="/" className="btn btn-g btn-sm" style={{ alignSelf: 'flex-start' }}>
           <Icon name="back" className="flip" />
           {t('event.backToLibrary')}
         </Link>
-      </div>
-
-      <main id="main" className="wrap stack" style={{ flex: 1, paddingTop: 28, paddingBottom: 96, gap: 24 }}>
         <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: '16px 24px' }}>
           <div className="stack" style={{ flex: '1 1 520px', minWidth: 0, gap: 8 }}>
             <span className="t-sm muted">{meta}</span>
