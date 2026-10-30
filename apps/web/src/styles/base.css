@@ -77,9 +77,12 @@ body { margin: 0; min-height: 100vh; }
 .app .lb-dim { color: #A8ABB1; }
 .app .lb-body { flex: 1; display: flex; min-height: 0; }
 .app .lb-stage { position: relative; flex: 1; min-width: 0; display: grid; place-items: center; padding: 8px 72px 40px; overflow: hidden; }
-.app .lb-stage.zoomed { overflow: auto; place-items: start center; cursor: zoom-out; }
-.app .lb-img { max-width: 100%; max-height: calc(100vh - 120px); object-fit: contain; display: block; cursor: zoom-in; }
-.app .lb-stage.zoomed .lb-img { max-width: none; max-height: none; cursor: zoom-out; }
+.app .lb-stage.zoomed { cursor: zoom-out; touch-action: none; }
+.app .lb-img { max-width: 100%; max-height: calc(100vh - 120px); object-fit: contain; display: block; cursor: zoom-in; transition: transform .45s var(--ease-out-expo), transform-origin .15s ease-out; }
+.app .lb-stage.zoomed .lb-img { cursor: zoom-out; }
+/* Zoomed in, only the photo moves: the arrows and key hints step aside until zoom-out. */
+.app .lb-nav, .app .lb-keys { transition: opacity .25s var(--ease-out-expo), visibility .25s; }
+.app .lb-stage.zoomed .lb-nav, .app .lb-stage.zoomed .lb-keys { opacity: 0; visibility: hidden; pointer-events: none; }
 .app .lb-placeholder { position: absolute; width: min(100%, 1080px); filter: blur(14px) saturate(.8); opacity: .8; }
 .app .lb-loading { position: absolute; gap: 10px; color: #ECEDEF; }
 .app .lb-msg { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 24px; max-width: 520px; }

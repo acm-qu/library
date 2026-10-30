@@ -42,6 +42,8 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
   const { list, i } = useNeighbours(assetId);
   const [info, setInfo] = useState(() => matchMedia('(min-width: 761px)').matches);
   const [zoom, setZoom] = useState(false);
+  const [scale, setScale] = useState(2);
+  const img = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const dialog = useRef<HTMLDivElement>(null);
@@ -74,6 +76,17 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
     [list, i, navigate, background],
   );
 
+  // Zoom scales the image in place (the stage never scrolls, so the arrows stay put); the point under the pointer is
+  // the anchor, and moving the pointer moves it, which pans. At 100% of the photo's own pixels, or 1.5× if it's small.
+  const zoomTo = (on: boolean, x?: number, y?: number) => {
+    const el = img.current;
+    if (on && el) {
+      setScale(Math.max(1.5, el.naturalWidth / el.offsetWidth));
+      aim(el, x, y);
+    }
+    setZoom(on);
+  };
+
   const onKey = (e: React.KeyboardEvent) => {
     if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
@@ -82,7 +95,7 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
     else if (k === 'arrowright') go(rtl ? -1 : 1);
     else if (k === 'arrowleft') go(rtl ? 1 : -1);
     else if (k === 'i') setInfo((v) => !v);
-    else if (k === 'z' && a?.kind === 'image') setZoom((v) => !v);
+    else if (k === 'z' && a?.kind === 'image') zoomTo(!zoom);
     else if (k === 'tab') trapTab(e, dialog.current);
     else return;
     if (k !== 'tab') e.preventDefault();
@@ -112,13 +125,13 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
         <span className="grow" />
         {a?.kind === 'image' && a.viewUrl && (
           <div className="hide-sm row" style={{ gap: 4 }}>
-            <button className="btn btn-g btn-ic" aria-label={t('viewer.zoomOut')} onClick={() => setZoom(false)} disabled={!zoom}>
+            <button className="btn btn-g btn-ic" aria-label={t('viewer.zoomOut')} onClick={() => zoomTo(false)} disabled={!zoom}>
               <Icon name="zoomOut" />
             </button>
             <span className="t-sm tnum lb-dim" style={{ display: 'grid', placeItems: 'center', minWidth: 52 }}>
               {zoom ? '100%' : t('viewer.fit')}
             </span>
-            <button className="btn btn-g btn-ic" aria-label={t('viewer.zoomIn')} onClick={() => setZoom(true)} disabled={zoom}>
+            <button className="btn btn-g btn-ic" aria-label={t('viewer.zoomIn')} onClick={() => zoomTo(true)} disabled={zoom}>
               <Icon name="zoomIn" />
             </button>
           </div>
@@ -135,7 +148,7 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
       </div>
 
       <div className="lb-body">
-        <div className={`lb-stage${zoom ? ' zoomed' : ''}`}>
+        <div className={`lb-stage${zoom ? ' zoomed' : ''}`} onPointerMove={zoom ? (e) => img.current && aim(img.current, e.clientX, e.clientY) : undefined}>
           <button className="btn btn-ic btn-on-media lb-nav lb-prev" aria-label={t('viewer.prev')} onClick={() => go(-1)} disabled={i <= 0}>
             <Icon name="back" className="flip" />
           </button>
@@ -162,14 +175,15 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
             <>
               {!loaded && a.thumbUrl && <img className="lb-img lb-placeholder" src={a.thumbUrl} alt="" aria-hidden="true" />}
               <img
+                ref={img}
                 key={a.viewUrl}
                 className="lb-img"
                 src={a.viewUrl}
                 alt={alt}
                 onLoad={() => setLoaded(true)}
                 onError={() => setFailed(true)}
-                onClick={() => setZoom((z) => !z)}
-                style={loaded ? undefined : { position: 'absolute', opacity: 0 }}
+                onClick={(e) => (zoom ? zoomTo(false) : zoomTo(true, e.clientX, e.clientY))}
+                style={loaded ? (zoom ? { transform: `scale(${scale})` } : undefined) : { position: 'absolute', opacity: 0 }}
               />
               {!loaded && (
                 <span className="lb-loading row" aria-live="polite">
@@ -286,6 +300,15 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
       </div>
     </div>
   );
+}
+
+/** Anchor the zoom at a screen point (clamped to the image), or at its centre. */
+function aim(el: HTMLImageElement, x?: number, y?: number) {
+  const box = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect();
+  if (x === undefined || y === undefined || !box) return void (el.style.transformOrigin = '50% 50%');
+  const fx = Math.min(1, Math.max(0, (x - box.left - el.offsetLeft) / el.offsetWidth));
+  const fy = Math.min(1, Math.max(0, (y - box.top - el.offsetTop) / el.offsetHeight));
+  el.style.transformOrigin = `${(fx * 100).toFixed(2)}% ${(fy * 100).toFixed(2)}%`;
 }
 
 function trapTab(e: React.KeyboardEvent, root: HTMLElement | null) {
