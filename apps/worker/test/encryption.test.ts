@@ -39,7 +39,7 @@ beforeEach(async () => {
   const c = await addUser('c@x.qa', { role: 'core' });
   uploader = c.id;
   coreSid = (await createSession(db, c.id, { ip: null, userAgent: null })).token;
-  memberSid = (await createSession(db, (await addUser('m@x.qa')).id, { ip: null, userAgent: null })).token;
+  memberSid = (await createSession(db, (await addUser('m@x.qa', { role: 'member' })).id, { ip: null, userAgent: null })).token;
   eventId = newId();
   await db.insert(events).values({ id: eventId, title: 'E', slug: 'e', startsOn: '2026-10-10', createdBy: uploader });
 });

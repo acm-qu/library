@@ -162,7 +162,7 @@ describe('media routes after processing', () => {
     const { id } = await queuedImage(`${fx}/big.jpg`, 'jpg', { originalFilename: 'Hackathon – day 1.JPG', originalMime: 'image/jpeg' });
     const core = await queuedImage(`${fx}/big.jpg`, 'jpg', { tier: 'core' });
     await runUntil(ctx);
-    const m = await addUser('m@x.qa');
+    const m = await addUser('m@x.qa', { role: 'member' });
     const sid = (await createSession(db, m.id, { ip: null, userAgent: null })).token;
     const get = (url: string, headers: Record<string, string> = {}) => t.app.inject({ method: 'GET', url, headers, cookies: { sid } });
 

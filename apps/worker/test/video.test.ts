@@ -141,7 +141,7 @@ describe('HLS routes', () => {
     const id = await queuedVideo(`${fx}/land.mp4`);
     await runUntil(ctx);
     const app = await buildApp({ cfg: ctx.cfg, db, logger: false, mailer: { sendSignInCode: async () => {} } });
-    const m = await addUser('m@x.qa');
+    const m = await addUser('m@x.qa', { role: 'member' });
     const sid = (await createSession(db, m.id, { ip: null, userAgent: null })).token;
     const get = (url: string, headers: Record<string, string> = {}) => app.inject({ method: 'GET', url, headers, cookies: { sid } });
     const master = await get(`/api/media/${id}/hls/master.m3u8`);
