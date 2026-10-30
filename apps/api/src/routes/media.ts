@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { ServerConfig } from '@acm/core/config';
 import { type Asset, assetKeys, type Db, type RenditionKind, renditions } from '@acm/core/db';
 import { openRange, parseMasterKey, readHeader, unwrapKey } from '@acm/core/crypto';
-import { servedAs } from '../media/throttle.ts';
+import { admit, servedAs } from '../media/throttle.ts';
 import { Readable } from 'node:stream';
 import { assetDir, originalPath } from '@acm/core/paths';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -28,12 +28,13 @@ const KINDS: Record<string, { kinds: RenditionKind[]; min: 'full' | 'download'; 
 export async function sendFile(req: FastifyRequest, reply: FastifyReply, file: string, type: string, headers: Record<string, string>) {
   const st = await stat(file).catch(() => null);
   if (!st?.isFile()) throw notFound();
+  if (req.method !== 'HEAD') admit(st.size);
   reply.headers({ 'Content-Type': type, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff', ...headers });
   const span = parseRange(req.headers.range, st.size);
   if (span === 'unsatisfiable') return reply.code(416).header('Content-Range', `bytes */${st.size}`).send();
   if (span) {
     reply.code(206).header('Content-Range', `bytes ${span.start}-${span.end}/${st.size}`).header('Content-Length', String(span.end - span.start + 1));
-    return reply.send(req.method === 'HEAD' ? '' : servedAs(createReadStream(file, { start: span.start, end: span.end }), span.end - span.start + 1));
+    return reply.send(req.method === 'HEAD' ? '' : servedAs(createReadStream(file, { start: span.start, end: span.end }), st.size));
   }
   reply.header('Content-Length', String(st.size));
   return reply.send(req.method === 'HEAD' ? '' : servedAs(createReadStream(file), st.size));
@@ -45,6 +46,7 @@ export async function sendSealed(req: FastifyRequest, reply: FastifyReply, file:
     throw notFound();
   });
   const size = h.plaintextSize;
+  if (req.method !== 'HEAD') admit(size);
   reply.headers({ 'Content-Type': type, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff', ...headers });
   const span = parseRange(req.headers.range, size);
   if (span === 'unsatisfiable') return reply.code(416).header('Content-Range', `bytes */${size}`).send();
@@ -54,9 +56,9 @@ export async function sendSealed(req: FastifyRequest, reply: FastifyReply, file:
   reply.header('Content-Length', String(size === 0 ? 0 : end - start + 1));
   if (req.method === 'HEAD' || size === 0) return reply.send('');
   // An authentication failure mid-stream destroys the response: the client sees a broken download, never bad bytes.
-  const stream = Readable.from(openRange(file, key, assetId, start, end));
+  const stream = Readable.from(openRange(file, key, assetId, start, end), { highWaterMark: 1 });
   stream.on('error', (err) => req.log.error({ err, assetId }, 'sealed file failed authentication'));
-  return reply.send(servedAs(stream, end - start + 1));
+  return reply.send(servedAs(stream, size));
 }
 
 export function mediaRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: ServerConfig }) {

@@ -90,7 +90,7 @@ describe('verify', () => {
     await request('sara@qu.edu.qa');
     const res = await verify('sara@qu.edu.qa', (await t.lastCode())!);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ id: expect.any(String), email: 'sara@qu.edu.qa', name: 'sara', role: 'core', isAdmin: false, isFemale: true });
+    expect(res.json()).toEqual({ id: expect.any(String), email: 'sara@qu.edu.qa', name: 'sara', role: 'core', isAdmin: false, isSuperadmin: false, isFemale: true });
     const c = res.cookies.find((x) => x.name === 'sid')!;
     expect(c).toMatchObject({ httpOnly: true, sameSite: 'Lax', path: '/' });
     expect((await me(c.value)).json().email).toBe('sara@qu.edu.qa');

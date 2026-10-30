@@ -18,11 +18,11 @@ describe('IO pacer', () => {
 });
 
 describe('source readrate', () => {
-  it('keeps the encode reading the source at or under 8 MiB/s', async () => {
+  it('keeps the encode reading the source at or under 5 MiB/s', async () => {
     const { sourceReadrate } = await import('../src/lib/ffmpeg.ts');
-    expect(sourceReadrate(100 * 2 ** 20, 10)).toBeCloseTo(0.8); // 10 MiB/s source → 0.8× real time
-    expect(sourceReadrate(10 * 2 ** 20, 60)).toBe(20); // low bitrate: capped at 20×
-    expect(sourceReadrate(2 ** 30, 1)).toBe(0.25); // absurd bitrate: floor so it still finishes
+    expect(sourceReadrate(100 * 2 ** 20, 10)).toBeCloseTo(0.5); // 10 MiB/s source → 0.5× real time
+    expect(sourceReadrate(10 * 2 ** 20, 60)).toBe(2.5); // low bitrate: capped at 2.5× so HLS writes stay ≈ 3 MB/s
+    expect(sourceReadrate(2 ** 30, 1)).toBe(0.05); // absurd bitrate: floor so it still finishes
     expect(sourceReadrate(0, 0)).toBe(1);
   });
 });

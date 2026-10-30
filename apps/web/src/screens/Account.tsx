@@ -76,9 +76,9 @@ export function AccountScreen() {
             {/* Only core accounts sign in; admin adds platform management. */}
             <span className="tier">
               <Icon name="shield" />
-              {t(me.isAdmin ? 'account.admin' : 'account.coreMember')}
+              {t(me.isSuperadmin ? 'account.superadmin' : me.isAdmin ? 'account.admin' : 'account.coreMember')}
             </span>
-            <span className="t-sm muted">{t(me.isAdmin ? 'account.adminHelp' : 'account.coreHelp')}</span>
+            <span className="t-sm muted">{t(me.isSuperadmin ? 'account.superadminHelp' : me.isAdmin ? 'account.adminHelp' : 'account.coreHelp')}</span>
           </div>
         </div>
       </section>

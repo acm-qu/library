@@ -22,9 +22,9 @@ const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 type Pending = { kind: 'disable'; user: AdminUser } | null;
 /** Spreadsheet with an Email column; paste the column into the list below. */
 const TEMPLATE = '/members-template.xlsx';
-const roleOptions = (t: ReturnType<typeof useTranslation>['t']) => [
+const roleOptions = (t: ReturnType<typeof useTranslation>['t'], superadmin: boolean) => [
   { value: 'core' as const, label: t('admin.m_roleCore') },
-  { value: 'admin' as const, label: t('admin.m_roleAdmin') },
+  { value: 'admin' as const, label: t('admin.m_roleAdmin'), disabled: !superadmin },
 ];
 
 export function MembersScreen() {
@@ -58,7 +58,7 @@ export function MembersScreen() {
       setPending(null);
     } catch (e) {
       setPending(null);
-      setError(e instanceof ApiError && e.code === 'not_allowed' ? t('admin.m_lastAdmin') : t('errors.internal'));
+      setError(e instanceof ApiError && e.code === 'not_allowed' ? t(b.isAdmin !== undefined ? 'admin.m_superOnly' : 'admin.m_lastAdmin') : t('errors.internal'));
     }
   };
 
@@ -124,6 +124,7 @@ export function MembersScreen() {
         </div>
       )}
 
+      {!me.isSuperadmin && <span className="help">{t('admin.m_superOnly')}</span>}
       <div className="card scroll-x" aria-busy={users.isPending || undefined} aria-label={users.isPending ? t('states.loading') : undefined}>
         <table className="tbl">
           <thead>
@@ -157,7 +158,7 @@ export function MembersScreen() {
                   {u.isAdmin ? (
                     <span className="tier">
                       <Icon name="shield" />
-                      {t('admin.m_roleAdmin')}
+                      {t(u.isSuperadmin ? 'admin.m_roleSuper' : 'admin.m_roleAdmin')}
                     </span>
                   ) : (
                     <span className="tier">{t('admin.m_roleCore')}</span>
@@ -170,7 +171,8 @@ export function MembersScreen() {
                     aria-label={t('admin.m_adminFor', { name: u.name || u.email })}
                     className={`switch${u.isAdmin ? ' on' : ''}`}
                     style={{ border: 0, cursor: 'pointer' }}
-                    disabled={patch.isPending}
+                    // Super admins are set in the server's .env, so not even they can switch one off here.
+                    disabled={patch.isPending || !me.isSuperadmin || u.isSuperadmin}
                     onClick={() => void change(u, { isAdmin: !u.isAdmin })}
                   />
                 </td>
@@ -179,7 +181,7 @@ export function MembersScreen() {
                 <td>
                   <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
                     {u.status === 'active' ? (
-                      u.id !== me.id && (
+                      u.id !== me.id && !u.isSuperadmin && (
                         <button className="btn btn-g btn-sm" style={{ color: 'var(--danger)' }} onClick={() => setPending({ kind: 'disable', user: u })}>
                           {t('admin.m_disable')}
                         </button>
@@ -290,6 +292,7 @@ function Requests() {
 
 function AddOne({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
+  const superadmin = !!useMe().data?.isSuperadmin;
   const [f, setF] = useState({ email: '', name: '', isFemale: null as boolean | null, isAdmin: false });
   const [err, setErr] = useState<string | null>(null);
   const add = useAdminMutation((b: typeof f) => api.createUser(b));
@@ -299,7 +302,7 @@ function AddOne({ onClose }: { onClose: () => void }) {
       await add.mutateAsync([{ ...f, email: f.email.trim() }]);
       onClose();
     } catch (e) {
-      setErr(e instanceof ApiError && e.code === 'conflict' ? t('admin.m_exists') : t('errors.internal'));
+      setErr(e instanceof ApiError && e.code === 'conflict' ? t('admin.m_exists') : e instanceof ApiError && e.code === 'not_allowed' ? t('admin.m_superOnly') : t('errors.internal'));
     }
   };
   return (
@@ -329,7 +332,8 @@ function AddOne({ onClose }: { onClose: () => void }) {
           <label className="label" htmlFor="ar">
             {t('admin.m_role')}
           </label>
-          <Select id="ar" value={f.isAdmin ? 'admin' : 'core'} options={roleOptions(t)} onChange={(v) => setF({ ...f, isAdmin: v === 'admin' })} />
+          <Select id="ar" value={f.isAdmin ? 'admin' : 'core'} options={roleOptions(t, superadmin)} onChange={(v) => setF({ ...f, isAdmin: v === 'admin' })} />
+          {!superadmin && <span className="help">{t('admin.m_superOnly')}</span>}
         </div>
       </div>
       <GenderRadio id="ag" value={f.isFemale} onChange={(isFemale) => setF({ ...f, isFemale })} />
@@ -355,6 +359,7 @@ function AddOne({ onClose }: { onClose: () => void }) {
 function AddMany({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
+  const superadmin = !!useMe().data?.isSuperadmin;
   const [isAdmin, setIsAdmin] = useState(false);
   const [done, setDone] = useState<number | null>(null);
   const existing = useUsers({}).data?.pages.flatMap((p) => p.items).map((u) => u.email) ?? [];
@@ -418,7 +423,8 @@ function AddMany({ onClose }: { onClose: () => void }) {
             <label className="label" htmlFor="br">
               {t('admin.m_addAs')}
             </label>
-            <Select id="br" value={isAdmin ? 'admin' : 'core'} options={roleOptions(t)} onChange={(v) => setIsAdmin(v === 'admin')} />
+            <Select id="br" value={isAdmin ? 'admin' : 'core'} options={roleOptions(t, superadmin)} onChange={(v) => setIsAdmin(v === 'admin')} />
+            {!superadmin && <span className="help">{t('admin.m_superOnly')}</span>}
           </div>
           <span className="grow" />
           <button

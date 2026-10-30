@@ -10,6 +10,6 @@ export function meRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.patch('/api/me', { preHandler: requireUser }, async (req) => {
     const body = PatchMeBody.parse(req.body);
     const [u] = await db.update(users).set({ ...body, gender: legacyGender(body.isFemale) }).where(eq(users.id, viewerOf(req).id)).returning();
-    return Me.parse(u);
+    return Me.parse({ ...u, isSuperadmin: viewerOf(req).isSuperadmin });
   });
 }

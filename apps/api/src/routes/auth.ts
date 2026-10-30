@@ -5,7 +5,7 @@ import { Me, RequestAccessBody, RequestCodeBody, VerifyBody } from '@acm/core/sc
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { issueCode, type OtpDeps, verifyCode } from '../auth/otp.ts';
-import { cookieOptions, requireUser, viewerOf } from '../auth/plugin.ts';
+import { cookieOptions, isSuperadmin, requireUser, viewerOf } from '../auth/plugin.ts';
 import { createSession, deleteSession, deleteUserSessions, SESSION_COOKIE } from '../auth/sessions.ts';
 import { audit } from '../lib/audit.ts';
 import { HttpError } from '../lib/errors.ts';
@@ -68,7 +68,7 @@ export function authRoutes(app: FastifyInstance, deps: { db: Db; cfg: ServerConf
     await audit(db, user.id, 'auth.login', { type: 'user', id: user.id }, { ip: req.ip });
     const s = await createSession(db, user.id, { ip: req.ip, userAgent: req.headers['user-agent'] ?? null });
     reply.setCookie(SESSION_COOKIE, s.token, cookieOptions(cfg, s.expiresAt));
-    return Me.parse(user);
+    return Me.parse({ ...user, isSuperadmin: isSuperadmin(cfg, user) });
   });
 
   app.post('/api/auth/logout', { preHandler: requireUser }, async (req, reply) => {

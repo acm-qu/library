@@ -62,7 +62,19 @@ function HlsPlayer({ asset }: { asset: AssetDetail }) {
         v.src = asset.hlsUrl!;
         return;
       }
-      const h = new HlsCtor({ capLevelToPlayerSize: true, maxBufferLength: 30 });
+      const h = new HlsCtor({
+        capLevelToPlayerSize: true,
+        maxBufferLength: 30,
+        // The server answers 429 while its paced-response slots are full; hls.js only retries 5xx by default.
+        fragLoadPolicy: {
+          default: {
+            maxTimeToFirstByteMs: 10_000,
+            maxLoadTimeMs: 120_000,
+            timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 },
+            errorRetry: { maxNumRetry: 6, retryDelayMs: 1000, maxRetryDelayMs: 8000, shouldRetry: (cfg, n, _t, res, retry) => retry || (res?.code === 429 && n < (cfg?.maxNumRetry ?? 0)) },
+          },
+        },
+      });
       hls.current = h;
       h.on(HlsCtor.Events.MANIFEST_PARSED, (_e, data) => {
         setLevels(data.levels.map((l, index) => { const short = Math.min(l.width, l.height) || l.height; return { index, short, label: `${short}p` }; }).sort((a, b) => b.short - a.short));

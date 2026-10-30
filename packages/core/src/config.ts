@@ -45,6 +45,8 @@ export const ServerConfig = z
     UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(20 * 2 ** 30),
     UPLOAD_CHUNK_BYTES: z.coerce.number().int().positive().default(8 * 2 ** 20),
     PRELAUNCH_ALLOWLIST: emailList,
+    /** The only accounts that may make or remove admins. Empty: nobody can, and bootstrap-admin makes the first. */
+    SUPERADMINS: emailList,
   })
   .refine((c) => c.NODE_ENV !== 'production' || c.MAIL_TRANSPORT === 'smtp', {
     path: ['MAIL_TRANSPORT'],

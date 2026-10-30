@@ -3,6 +3,7 @@
 // everything properly, so a failed probe leaves fields null instead of failing the upload.
 import { execFile } from 'node:child_process';
 import { open } from 'node:fs/promises';
+import { setPriority } from 'node:os';
 import type { HdrFormat } from '@acm/core/db';
 import { imageSize } from 'image-size';
 
@@ -52,7 +53,7 @@ export function parseFfprobe(json: { streams?: FfStream[]; format?: { duration?:
 
 export function probeVideo(ffprobe: string, file: string): Promise<Probe> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       ffprobe,
       ['-v', 'error', '-threads', '1', '-print_format', 'json', '-show_format', '-show_streams', file],
       { timeout: 20_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, OMP_NUM_THREADS: '1' } },
@@ -65,5 +66,10 @@ export function probeVideo(ffprobe: string, file: string): Promise<Probe> {
         }
       },
     );
+    try {
+      if (child.pid) setPriority(child.pid, 19); // nice 19 like the worker's children, so a probe never slows pages
+    } catch {
+      /* not permitted everywhere */
+    }
   });
 }

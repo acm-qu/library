@@ -107,15 +107,16 @@ export function baseFilter(hdr: 'sdr' | 'hlg' | 'pq', lut?: string): string {
 const scaleFor = (h: number) => `scale=w='if(gte(iw,ih),-2,${h})':h='if(gte(iw,ih),${h},-2)'`;
 
 /** The encode reads its source at most this fast (bytes/s): part of the account's 30 MB/s disk budget. */
-export const SOURCE_READ_BPS = 8 * 2 ** 20;
+export const SOURCE_READ_BPS = 5 * 2 ** 20;
 
 /**
  * ffmpeg's -readrate (a multiple of real time) that keeps reading under SOURCE_READ_BPS for a file of `bytes`
- * lasting `durationS`. Floored at 0.25× so a very high-bitrate source still finishes; capped at 20× for tiny files.
+ * lasting `durationS`. Floored at 0.05× so a very high-bitrate source still finishes; capped at 2.5× real time so
+ * the HLS writes (≈ 1.25 MB/s per 1× of video) stay near 3 MB/s.
  */
 export function sourceReadrate(bytes: number, durationS: number) {
   if (!(bytes > 0) || !(durationS > 0)) return 1;
-  return Math.min(20, Math.max(0.25, SOURCE_READ_BPS / (bytes / durationS)));
+  return Math.min(2.5, Math.max(0.05, SOURCE_READ_BPS / (bytes / durationS)));
 }
 
 export function hlsArgs(o: {
@@ -134,8 +135,10 @@ export function hlsArgs(o: {
   const fps = Math.round(o.fps) || 30;
   const g = String(2 * fps);
   const split = n > 1 ? `,split=${n}${o.rungs.map((_, i) => `[s${i}]`).join('')}` : '[s0]';
-  const fc = `[0:v]${o.vf}${split};${o.rungs.map((r, i) => `[s${i}]${scaleFor(r.h)}[v${i}]`).join(';')}`;
-  // One thread each for decode, filters and every x264 rung (3 rungs ≈ 3 cores), so the API keeps the 4th core.
+  // Downscale to the top rung before o.vf: HDR tone-mapping (float RGB frames) then runs on ≤ 1080p, not 4K, which
+  // cuts its memory and CPU; zscale names its input transfer and primaries, so the plain resize ahead of it is safe.
+  const fc = `[0:v]${scaleFor(Math.max(...o.rungs.map((r) => r.h)))},${o.vf}${split};${o.rungs.map((r, i) => `[s${i}]${scaleFor(r.h)}[v${i}]`).join(';')}`;
+  // One thread each for decode, filters and every x264 rung; taskset (spawn.ts) holds them all to 2 cores.
   const args = ['-nostdin', '-hide_banner', '-y', '-filter_threads', '1', '-filter_complex_threads', '1', '-threads', '1', ...(o.readrate ? ['-readrate', o.readrate.toFixed(2)] : []), '-i', o.src, '-filter_complex', fc];
   o.rungs.forEach((_, i) => {
     args.push('-map', `[v${i}]`);

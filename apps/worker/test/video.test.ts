@@ -72,6 +72,8 @@ describe('ffmpeg builders', () => {
     expect(a[a.indexOf('-var_stream_map') + 1]).toBe('v:0,name:360p v:1,name:720p');
     expect(a[a.indexOf('-g') + 1]).toBe('60');
     expect(a).toContain('-hls_key_info_file');
+    // Tone-mapping (or SDR's format=yuv420p) runs after the downscale to the top rung, then the split.
+    expect(a[a.indexOf('-filter_complex') + 1]).toMatch(/^\[0:v\]scale=w='if\(gte\(iw,ih\),-2,720\)':h='if\(gte\(iw,ih\),720,-2\)',format=yuv420p,split=2\[s0\]\[s1\];/);
     expect(baseFilter('hlg')).toContain('tin=arib-std-b67');
     expect(baseFilter('pq')).toContain('tin=smpte2084');
   });

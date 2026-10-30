@@ -20,14 +20,56 @@ describe('compute usage', () => {
 });
 
 describe('media serving budget', () => {
-  it('paces large responses to the shared rate and leaves small ones alone', async () => {
+  const drain = async (r: AsyncIterable<unknown>) => {
+    for await (const _ of r) void _;
+  };
+
+  it('paces small files through their own budget', async () => {
     const { Readable } = await import('node:stream');
-    const { servedAs, SERVE_BPS } = await import('../src/media/throttle.ts');
-    const small = Readable.from([Buffer.alloc(1024)]);
-    expect(servedAs(small, 1024)).toBe(small);
-    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SERVE_BPS / 8)); // half a second's worth in total
+    const { servedAs, SMALL_BPS } = await import('../src/media/throttle.ts');
+    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SMALL_BPS / 16)); // the 2nd-4th wait 1/16 s each
     const t0 = Date.now();
-    for await (const _ of servedAs(Readable.from(chunks), SERVE_BPS / 2)) void _;
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(300);
+    await drain(servedAs(Readable.from(chunks), 1024));
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
+  });
+
+  it('paces a small Range slice of a big file by the file, not the slice', async () => {
+    const { Readable } = await import('node:stream');
+    const { servedAs, SERVE_BPS, PACE_OVER } = await import('../src/media/throttle.ts');
+    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SERVE_BPS / 32)); // a 640 KiB slice: the 2nd-4th wait 1/32 s each
+    expect(chunks.length * chunks[0]!.length).toBeLessThan(PACE_OVER);
+    const t0 = Date.now();
+    await drain(servedAs(Readable.from(chunks), 500 * 2 ** 20));
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(80);
+  });
+
+  it('answers 429 once MAX_PACED large responses are held, and frees a slot when one closes', async () => {
+    const { Readable } = await import('node:stream');
+    const { once } = await import('node:events');
+    const { admit, servedAs, MAX_PACED } = await import('../src/media/throttle.ts');
+    const open = Array.from({ length: MAX_PACED }, () => servedAs(Readable.from([Buffer.alloc(1)]), 100 * 2 ** 20));
+    expect(() => admit(100 * 2 ** 20)).toThrow(expect.objectContaining({ code: 'rate_limited', extra: { retry_after: 5 } }));
+    expect(() => admit(1024)).not.toThrow(); // small files are never refused
+    open[0]!.destroy();
+    await once(open[0]!, 'close');
+    expect(() => admit(100 * 2 ** 20)).not.toThrow();
+    for (const s of open.slice(1)) s.destroy();
+  });
+});
+
+describe('worker wake', () => {
+  it('keeps at most one pending waiter', async () => {
+    const { existsSync, mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const { wakeWorker } = await import('../src/lib/wake.ts');
+    const dir = mkdtempSync(path.join(tmpdir(), 'wake-'));
+    wakeWorker('sleep 0.3');
+    wakeWorker(`touch ${dir}/skipped`); // the first is still alive
+    await new Promise((r) => setTimeout(r, 600));
+    wakeWorker(`touch ${dir}/ran`);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(existsSync(`${dir}/skipped`)).toBe(false);
+    expect(existsSync(`${dir}/ran`)).toBe(true);
   });
 });

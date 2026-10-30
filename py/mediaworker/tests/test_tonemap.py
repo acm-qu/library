@@ -296,6 +296,7 @@ def test_gate_reuses_a_failed_result_with_the_same_fingerprint(tmp_path: Path, m
 def test_scan_readrate_keeps_reads_under_budget(tmp_path):
     from mediaworker.tonemap import frames
     f = tmp_path / "clip.mov"
-    f.write_bytes(b"\0" * (16 * 2**20))  # 16 MiB over 1 s = 16 MiB/s → 0.5x real time
-    assert frames.readrate(str(f), 1.0) == ["-readrate", "0.50"]
+    f.write_bytes(b"\0" * (16 * 2**20))  # 16 MiB over 1 s = 16 MiB/s → 5/16 = 0.31x real time
+    assert frames.readrate(str(f), 1.0) == ["-readrate", "0.31"]
+    assert frames.readrate(str(f), 0.01) == ["-readrate", "0.05"]  # absurd bitrate: the floor
     assert frames.readrate(str(f), 0.0) == []

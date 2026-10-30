@@ -25,7 +25,7 @@ import {
 import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { requireAdmin, viewerOf } from '../auth/plugin.ts';
+import { isSuperadmin, requireAdmin, viewerOf } from '../auth/plugin.ts';
 import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { thumbUrl } from '../lib/dto.ts';
@@ -44,6 +44,8 @@ async function setting<T>(db: Db, key: string): Promise<T | null> {
   const [row] = await db.select().from(appSettings).where(eq(appSettings.key, key));
   return (row?.value as T) ?? null;
 }
+const onlySuperadmin = () => new HttpError('not_allowed', {}, 'Only the super admin can make or remove admins.');
+
 const putSetting = (db: Pick<Db, 'insert'>, key: string, value: unknown) =>
   db.insert(appSettings).values({ key, value }).onConflictDoUpdate({ target: appSettings.key, set: { value } });
 
@@ -78,7 +80,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
       })
       .from(users);
     return {
-      items: page.map(({ u }) => ({ id: u.id, email: u.email, name: u.name, role: u.role, isAdmin: u.isAdmin, status: u.status, isFemale: u.isFemale, createdAt: u.createdAt.toISOString(), lastLoginAt: iso(u.lastLoginAt) })),
+      items: page.map(({ u }) => ({ id: u.id, email: u.email, name: u.name, role: u.role, isAdmin: u.isAdmin, isSuperadmin: isSuperadmin(cfg, u), status: u.status, isFemale: u.isFemale, createdAt: u.createdAt.toISOString(), lastLoginAt: iso(u.lastLoginAt) })),
       nextCursor: rows.length > q.limit && last ? encodeCursor({ c: last.c, i: last.u.id }) : null,
       counts,
     };
@@ -87,6 +89,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
   app.post('/api/admin/users', { preHandler: requireAdmin }, async (req, reply) => {
     const v = viewerOf(req);
     const body = CreateUserBody.parse(req.body);
+    if (body.isAdmin && !v.isSuperadmin) throw onlySuperadmin();
     const [exists] = await db.select({ id: users.id }).from(users).where(eq(users.email, body.email));
     if (exists) throw new HttpError('conflict', { fields: { email: 'exists' } }, 'Someone with that email is already a member.');
     const id = newId();
@@ -154,6 +157,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
   app.post('/api/admin/users/bulk', { preHandler: requireAdmin }, async (req) => {
     const v = viewerOf(req);
     const { emails, isAdmin } = BulkUsersBody.parse(req.body);
+    if (isAdmin && !v.isSuperadmin) throw onlySuperadmin();
     const skipped: { email: string; reason: 'invalid' | 'exists' | 'duplicate' }[] = [];
     const valid: string[] = [];
     const seen = new Set<string>();
@@ -187,12 +191,17 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
       await tx.execute(sql`select id from ${users} where ${users.isAdmin} for update`);
       const [u] = await tx.select().from(users).where(eq(users.id, id)).for('update');
       if (!u) return notFound();
+      const targetSuper = isSuperadmin(cfg, u);
+      if (targetSuper && !v.isSuperadmin) return new HttpError('not_allowed', {}, "Only the super admin can change a super admin's account.");
+      if (body.isAdmin !== undefined && body.isAdmin !== u.isAdmin && !v.isSuperadmin) return onlySuperadmin();
       // Every account is core; an old member row becomes core when it's edited, so the admin flag is always valid.
       const role = 'core' as const;
       const isAdmin = body.isAdmin ?? u.isAdmin;
       const status = body.status ?? u.status;
       const wasActiveAdmin = u.isAdmin && u.status === 'active';
       const staysActiveAdmin = isAdmin && status === 'active';
+      // Super admins come from SUPERADMINS in the server's .env, so only that file can remove one.
+      if (targetSuper && !staysActiveAdmin) return new HttpError('not_allowed', {}, "A super admin can't be demoted or disabled here; they're set in the server configuration.");
       if (wasActiveAdmin && !staysActiveAdmin) {
         const [{ n } = { n: 0 }] = await tx
           .select({ n: sql<number>`count(*)::int` })

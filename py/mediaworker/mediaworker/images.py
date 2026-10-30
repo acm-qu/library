@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - the worker venv always has it
 
 VIEW_EDGE, VIEW_Q = 2560, 82
 THUMB_EDGE, THUMB_Q = 480, 75
-Image.MAX_IMAGE_PIXELS = 250_000_000  # ~16k x 16k; larger is almost certainly not a photo
+Image.MAX_IMAGE_PIXELS = 60_000_000  # Pillow refuses above 2x this: decodes stay ≤ 120 MP (≈ 1.1-1.4 GB of the 4 GB PMEM)
 
 _SRGB = ImageCms.createProfile("sRGB")
 

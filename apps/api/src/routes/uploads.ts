@@ -1,5 +1,6 @@
 // tus endpoint (resumable uploads), My uploads and Retry.
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import type { ServerConfig } from '@acm/core/config';
 import { assets, type Db, events, jobs } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
@@ -17,6 +18,7 @@ import { HttpError, notFound } from '../lib/errors.ts';
 import { activeJobs, byAsset } from '../lib/queue.ts';
 import { ingest, UnsupportedType } from '../uploads/ingest.ts';
 import { wakeWorker } from '../lib/wake.ts';
+import { paced, takeUpload } from '../media/throttle.ts';
 import { girlsOk } from '../policy/visibleSql.ts';
 
 /** Set by Fastify after auth and overwritten on every request, so a client can never supply it. */
@@ -37,12 +39,19 @@ function setInternalHeader(raw: FastifyRequest['raw'], name: string, value: stri
   raw.headers[name] = value;
 }
 
+/** Every PATCH body together is written at most UPLOAD_BPS, whatever the client does (the browser paces too). */
+class PacedFileStore extends FileStore {
+  override write(readable: Parameters<FileStore['write']>[0], id: string, offset: number) {
+    return super.write(Readable.from(paced(readable, takeUpload), { highWaterMark: 1 }), id, offset);
+  }
+}
+
 const tusError = (status: number, error: string, message: string) => ({ status_code: status, body: JSON.stringify({ error, message }) });
 
 export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: ServerConfig }) {
   const tus = new Server({
     path: '/api/uploads',
-    datastore: new FileStore({ directory: tusDir(cfg.MEDIA_ROOT) }),
+    datastore: new PacedFileStore({ directory: tusDir(cfg.MEDIA_ROOT) }),
     maxSize: cfg.UPLOAD_MAX_BYTES,
     relativeLocation: true,
     async onUploadCreate(req, upload) {

@@ -514,6 +514,8 @@ Anything below the route's minimum is **404**, never 403. The design repeats thi
 
 Read routes need no sign-in. `readerOf()` in `apps/api/src/auth/plugin.ts` turns a request without a session into `ANON`, an active member-role viewer that matches no uploader, so member-tier items are public and everything else follows the same table. Account, upload and admin routes still need a core session. There are no member accounts any more: every account is core, admin is a flag on top, and an old member row can't sign in.
 
+**Super admin.** `SUPERADMINS` in `shared/.env` (comma-separated emails, `tech@qu.acm.org` in production) names the super admins: an active admin whose email is listed is one (`isSuperadmin` on the viewer, `/me` and each `/admin/users` row; a listed email that isn't an admin grants nothing). Only a super admin can make or remove admins: changing `isAdmin`, or adding one or a bulk list with `isAdmin` true, answers 403 `not_allowed` for anyone else. Only a super admin can edit a super admin's account, and nobody can demote or disable one through the API, since the list lives in the server's config. Approving an access request stays open to every admin and always creates a core, non-admin account; the last-admin guard still applies. With `SUPERADMINS` empty (development, tests) nobody can change admin flags through the API, and `scripts/bootstrap-admin.ts` makes the first admin. Members disables the Admin switch and the Admin choice for everyone else ("Only the super admin can make or remove admins"), badges super admin rows and hides Disable on them; Account shows "Super admin".
+
 <Table
   id="canview-matrix"
   columns={["Asset state", "Signed out (ANON)", "Core (not uploader)", "Core uploader", "Admin"]}
@@ -974,6 +976,7 @@ Endpoints and parameters this plan adds or changes:
 - **Automatic tone curves.** `PATCH /admin/settings` accepts `tonemap_auto` either way, and the worker uses automatic selection whenever it is on. The validation gate's result (`gate-passed.json`) is shown next to the checkbox as information only.
 - **Audit coverage.** Every admin mutation, every tier or girls-only change (including a core member changing their own upload) and every delete writes `audit_log`.
 - **Accounts.** `POST /admin/users` and `/admin/users/bulk` take `isAdmin`, not a role: every new account is core. Editing an old member row makes it core, so the admin flag is always valid.
+- **Super admin.** `PATCH /admin/users/:id` with a changed `isAdmin`, and `POST /admin/users` or `/admin/users/bulk` with `isAdmin: true`, are super-admin only (403 `not_allowed`); so is any PATCH of a super admin's row, and a super admin can't be demoted or disabled at all.
 - **Last-admin guard.** It runs under `SELECT … FOR UPDATE` on the admin rows, so two admins can't demote each other at the same moment.
 
 **Errors.** Every error code comes from one `ErrorCode` union in `packages/core`. Field names are camelCase, except the handoff's mandated `retry_after`, which also goes out as a `Retry-After` header. tus errors use the same JSON body.
@@ -1106,7 +1109,7 @@ The canvas's `project/app.css` already defines every token and the base componen
     ["MyUploads · PhoneMyUploads", "/uploads", "MyUploadsScreen", "useMyUploads (polling) → /uploads/mine", "Grouped by event; plain-language errors; Retry"],
     ["AdminQueue", "/admin/queue", "QueueScreen", "useJobs(state) → /admin/jobs", "Health summary; Move to the top; Needs review actions; purge jobs and deleted items hidden"],
     ["AdminItem", "/admin/items/:assetId", "ItemDetailsScreen", "useProcessing → /admin/assets/:id/processing, /frames/:n", "Scores table, 8 frames on a timeline, override + re-process with ETA confirm"],
-    ["AdminMembers", "/admin/members", "MembersScreen (Members · Requests tabs)", "useUsers, useBulkAdd, useAccessRequests → /admin/users*, /admin/access-requests*", "Roles shown as Admin / Core; Gender column; Core or Admin and optional gender when adding one; bulk paste with a Download .xlsx template button; Requests tab with a pending count, Approve / Reject (confirm), skeleton and empty state; in-page confirms; last-admin guard"],
+    ["AdminMembers", "/admin/members", "MembersScreen (Members · Requests tabs)", "useUsers, useBulkAdd, useAccessRequests → /admin/users*, /admin/access-requests*", "Roles shown as Admin / Core (Super admin badge; Admin switch and choice disabled for non-super admins); Gender column; Core or Admin and optional gender when adding one; bulk paste with a Download .xlsx template button; Requests tab with a pending count, Approve / Reject (confirm), skeleton and empty state; in-page confirms; last-admin guard"],
     ["(no artboard)", "/admin/events", "EventsScreen", "useEvents → /events; EventEditDialog, DeleteEventConfirm → /events/:id", "Edit event and Delete event from one list"],
     ["AdminStorage", "/admin/storage", "StorageScreen", "useStorage → /admin/storage", "Unknown limit state; growth chart; re-measured after worker passes, at most every 15 min"],
     ["Account", "/account", "AccountScreen", "useMe, usePatchMe, useLogoutAll → /me, /auth/*", "Name and gender (Male / Female) editable; email read-only"],
@@ -1249,6 +1252,7 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
     ["Worker scheduling", "Cron every 2 minutes; the API starts the worker right after an upload finishes (WORKER_WAKE, flock -w 20); cron covers admin actions, retries and crashes"],
     ["torch and pyiqa", "Installed in Milestone 10, when automatic tone-curve selection is built"],
     ["First admin", "tech@qu.acm.org, created by scripts/bootstrap-admin.ts"],
+    ["Who makes admins", "Only a super admin: an active admin listed in SUPERADMINS (tech@qu.acm.org). Other admins get 403 not_allowed for admin changes and for any edit of a super admin's account; super admins can't be demoted or disabled through the API. Approvals stay open to every admin and create core accounts"],
     ["Upload client", "tus-js-client directly (the library Uppy's tus plugin wraps) behind the design's own upload screens; Uppy's dashboard UI isn't used, so it is left out"],
     ["Girls only", "A batch checkbox on the Upload screen (sent as tus metadata girlsOnly for every file) and a toggle in Admin › Item through PATCH /api/assets/:id. Only female core members and admins see these items; male admins get 404 and a queue row without details. The tier still controls encryption"],
     ["Event visibility for signed-out visitors", "Signed-out visitors see an event only when it holds something they can see; core members see every event, including empty ones to upload into"],

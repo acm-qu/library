@@ -24,6 +24,9 @@ export function AdminLayout() {
         </span>
         {link('/admin/members', t('admin.members'))}
         {link('/admin/events', t('admin.events'))}
+        <span className="t-over" style={{ padding: '16px 12px 8px' }}>
+          {t('admin.navCompute')}
+        </span>
         {link('/admin/queue', t('admin.queue'))}
         {link('/admin/storage', t('admin.storage'))}
       </nav>

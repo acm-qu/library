@@ -11,8 +11,8 @@ export const THREAD_ENV = { OMP_NUM_THREADS: '2', OPENBLAS_NUM_THREADS: '1', MKL
 const findTool = (name: string) =>
   ['/usr/bin', ...(process.env.PATH ?? '').split(path.delimiter).filter((d) => path.isAbsolute(d))].map((d) => path.join(d, name)).find((f) => existsSync(f)) ?? null;
 const IONICE = findTool('ionice');
-/** The account's CPU quota is 4 cores; children are pinned to 3 so the website always has the 4th, whatever they spawn. */
-export const WORKER_CPUS = '0-2';
+/** The account's CPU quota is 4 cores; children get 2 (≤ 200%), and 2-3 because CPUs 0-1 carry the network softirqs. */
+export const WORKER_CPUS = '2-3';
 const TASKSET = findTool('taskset');
 const wrap = (cmd: string, args: string[]): [string, string[]] => {
   const pre = [...(IONICE ? [IONICE, '-c3'] : []), ...(TASKSET ? [TASKSET, '-c', WORKER_CPUS] : [])];

@@ -22,7 +22,7 @@ something goes wrong. Security details are in `docs/security.md`.
 `shared/.env` holds `NODE_ENV=production`, `PUBLIC_ORIGIN=https://library.qu.acm.org`, `DATABASE_URL`, `MASTER_KEY`,
 `OTP_PEPPER`, `MAIL_TRANSPORT=smtp` with the `SMTP_*` values, `MEDIA_ROOT=/home/quhosting/media`,
 `KEYS_DIR=/home/quhosting/keys`, `FFMPEG`/`FFPROBE=/home/quhosting/bin/…`, `PYTHON=/home/quhosting/venvs/worker/bin/python`,
-`LUTS_DIR`, `LOG_FILE=/home/quhosting/logs/acm-api.log` (lsnode drops the API's stdout), `WORKER_WAKE` (the crontab's worker command with `flock -w 20` instead of `-n`), and `PRELAUNCH_ALLOWLIST` until
+`LUTS_DIR`, `LOG_FILE=/home/quhosting/logs/acm-api.log` (lsnode drops the API's stdout), `WORKER_WAKE` (the crontab's worker command with `flock -w 20` instead of `-n`; see Cron), and `PRELAUNCH_ALLOWLIST` until
 launch (it only limits who can sign in; member-tier items are public either way).
 
 ## Deploy
@@ -46,6 +46,21 @@ Install `deploy/crontab.template` with `crontab`. Or add each line in cPanel's C
 - cleanup hourly;
 - storage stats and the database backup nightly;
 - a health check every 10 minutes, which mails tech@qu.acm.org after 3 failures in a row.
+
+The worker, cleanup and stats lines run under `/usr/bin/taskset -c 2-3 nice -n 19`, so all worker processes share 2 of
+the account's 4 cores (CPUs 2-3, because 0-1 carry the network interrupt load) and the API keeps the rest.
+`WORKER_WAKE` in `shared/.env` needs the same prefix after the lock. The exact line:
+
+```sh
+WORKER_WAKE="/usr/bin/flock -w 20 /home/quhosting/tmp/acm-worker.lock /usr/bin/taskset -c 2-3 nice -n 19 /opt/alt/alt-nodejs24/root/usr/bin/node --env-file=/home/quhosting/apps/acm-media/shared/.env /home/quhosting/apps/acm-media/current/worker/run.mjs >> /home/quhosting/logs/acm-worker.log 2>&1"
+```
+
+The API keeps at most one wake waiting at a time, so a batch of uploads never piles up `flock` processes; a job
+queued while a woken worker is exiting waits for the next cron run (at most 2 minutes).
+
+`shared/backup.sh` and `shared/health.sh` are copies of `deploy/`; deploys don't update them, so copy them again
+(`chmod 700`) after changing either. `backup.sh` reads only `DATABASE_URL` from `shared/.env` (sourcing the whole
+file fails on the `SMTP_PASS` line).
 
 ## Everyday checks
 
@@ -91,7 +106,7 @@ to be tight, torch's C++ headers (`torch/include`, never used at runtime) are th
   dump and restore.
 - **A PostGIS `topology` schema** came with the database and our role can't dump it. Backups use `-n public`.
 - **CloudLinux limits per-account CPU and memory.** The account has 4 cores, 200 tasks
-  (processes + threads) and 30 MB/s of disk IO, while `nproc` reports 64. The worker runs one job at a time; children run
+  (processes + threads) and 30 MB/s of disk IO, while `nproc` reports 64. The worker runs one job at a time on CPUs 2-3; children run
   at nice 19 under `ionice -c3`, with BLAS/OpenMP capped, and every ffmpeg/ffprobe call has explicit `-threads`/
   `-filter_threads` (1 per stage in the HLS encode). Anything run by hand over SSH needs the same caps.
 - **One Passenger process.** Rate limits and tus upload locks are in memory. Running more processes would need

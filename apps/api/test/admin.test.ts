@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createSession } from '../src/auth/sessions.ts';
 import { addUser, db, H, useApp } from './helpers.ts';
 
-const t = useApp();
-let admin: { id: string; sid: string };
+const t = useApp({ SUPERADMINS: 'tech@qu.acm.org' });
+let admin: { id: string; sid: string }; // the super admin
 let core: { id: string; sid: string };
 let eventId: string;
 
@@ -106,15 +106,63 @@ describe('members', () => {
   });
 
   it('keeps at least one admin, demotes an admin to core, and ends sessions on disable', async () => {
-    expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { isAdmin: false })).statusCode).toBe(403);
-    expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { status: 'disabled' })).statusCode).toBe(403);
     expect((await call('PATCH', `/api/admin/users/${core.id}`, admin.sid, { isAdmin: true })).statusCode).toBe(200);
-    expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { isAdmin: false })).statusCode).toBe(200);
-    const [demoted] = await db.select().from(users).where(eq(users.id, admin.id));
+    expect((await call('PATCH', `/api/admin/users/${core.id}`, admin.sid, { isAdmin: false })).statusCode).toBe(200);
+    const [demoted] = await db.select().from(users).where(eq(users.id, core.id));
     expect([demoted!.role, demoted!.isAdmin]).toEqual(['core', false]);
-    expect((await call('PATCH', `/api/admin/users/${admin.id}`, core.sid, { status: 'disabled' })).statusCode).toBe(200);
-    expect(await db.select().from(sessions).where(eq(sessions.userId, admin.id))).toHaveLength(0);
-    expect((await db.select().from(auditLog)).map((a) => a.action).filter((a) => a === 'user.update')).toHaveLength(3);
+    expect((await call('PATCH', `/api/admin/users/${core.id}`, admin.sid, { isAdmin: true })).statusCode).toBe(200);
+    // With the super admin disabled outside the API, the last active admin can't disable themselves.
+    await db.update(users).set({ status: 'disabled' }).where(eq(users.id, admin.id));
+    const last = await call('PATCH', `/api/admin/users/${core.id}`, core.sid, { status: 'disabled' });
+    expect([last.statusCode, last.json().message]).toEqual([403, 'There has to be at least one admin.']);
+    await db.update(users).set({ status: 'active' }).where(eq(users.id, admin.id));
+    admin.sid = (await createSession(db, admin.id, { ip: null, userAgent: null })).token;
+    expect((await call('PATCH', `/api/admin/users/${core.id}`, admin.sid, { status: 'disabled' })).statusCode).toBe(200);
+    expect(await db.select().from(sessions).where(eq(sessions.userId, core.id))).toHaveLength(0);
+    expect((await db.select().from(auditLog)).map((a) => a.action).filter((a) => a === 'user.update')).toHaveLength(4);
+  });
+});
+
+describe('super admin', () => {
+  let lead: { id: string; sid: string };
+  beforeEach(async () => {
+    lead = await who('lead@qu.edu.qa', { role: 'core', isAdmin: true });
+  });
+  const refused = (r: { statusCode: number; json: () => { error: string } }) => expect([r.statusCode, r.json().error]).toEqual([403, 'not_allowed']);
+
+  it('alone makes and removes admins, and owns their own account', async () => {
+    refused(await call('PATCH', `/api/admin/users/${core.id}`, lead.sid, { isAdmin: true }));
+    refused(await call('PATCH', `/api/admin/users/${lead.id}`, lead.sid, { isAdmin: false }));
+    refused(await call('POST', '/api/admin/users', lead.sid, { email: 'boss@qu.edu.qa', isAdmin: true }));
+    refused(await call('POST', '/api/admin/users/bulk', lead.sid, { emails: ['b@qu.edu.qa'], isAdmin: true }));
+    expect(await db.select().from(users).where(inArray(users.email, ['boss@qu.edu.qa', 'b@qu.edu.qa']))).toHaveLength(0);
+    for (const b of [{ status: 'disabled' }, { name: 'X' }, { isAdmin: false }]) refused(await call('PATCH', `/api/admin/users/${admin.id}`, lead.sid, b));
+    // Everything else stays open to every admin.
+    expect((await call('POST', '/api/admin/users', lead.sid, { email: 'plain@qu.edu.qa' })).statusCode).toBe(201);
+    expect((await call('POST', '/api/admin/users/bulk', lead.sid, { emails: ['b@qu.edu.qa'] })).json().created).toBe(1);
+    expect((await call('PATCH', `/api/admin/users/${core.id}`, lead.sid, { name: 'Core', isAdmin: false })).statusCode).toBe(200);
+
+    expect((await call('PATCH', `/api/admin/users/${core.id}`, admin.sid, { isAdmin: true })).statusCode).toBe(200);
+    expect((await call('PATCH', `/api/admin/users/${lead.id}`, admin.sid, { isAdmin: false })).statusCode).toBe(200);
+    const flags = await db.select({ email: users.email, isAdmin: users.isAdmin }).from(users).where(inArray(users.id, [core.id, lead.id]));
+    expect(Object.fromEntries(flags.map((u) => [u.email, u.isAdmin]))).toEqual({ 'c@qu.edu.qa': true, 'lead@qu.edu.qa': false });
+    // Configured in SUPERADMINS, so not demotable or disablable here, even by themselves.
+    refused(await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { isAdmin: false }));
+    refused(await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { status: 'disabled' }));
+    expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { name: 'Tech' })).statusCode).toBe(200);
+  });
+
+  it('is reported by /api/me and the members list', async () => {
+    for (const [v, want] of [[admin, true], [lead, false], [core, false]] as const) expect((await call('GET', '/api/me', v.sid)).json().isSuperadmin).toBe(want);
+    const items: { email: string; isSuperadmin: boolean }[] = (await call('GET', '/api/admin/users', lead.sid)).json().items;
+    expect(Object.fromEntries(items.map((u) => [u.email, u.isSuperadmin]))).toEqual({ 'tech@qu.acm.org': true, 'lead@qu.edu.qa': false, 'c@qu.edu.qa': false });
+  });
+
+  it('leaves approvals to every admin, always as core non-admins', async () => {
+    const id = newId();
+    await db.insert(accessRequests).values({ id, email: 'huda@qu.edu.qa', name: 'Huda', isFemale: true, gender: 'female' });
+    expect((await call('POST', `/api/admin/access-requests/${id}/approve`, lead.sid)).statusCode).toBe(200);
+    expect((await db.select().from(users).where(eq(users.email, 'huda@qu.edu.qa')))[0]).toMatchObject({ role: 'core', isAdmin: false });
   });
 });
 

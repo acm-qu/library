@@ -8,6 +8,7 @@ export const AdminUser = z.object({
   name: z.string(),
   role: z.enum(ROLES),
   isAdmin: z.boolean(),
+  isSuperadmin: z.boolean(),
   status: z.enum(USER_STATUSES),
   isFemale: z.boolean().nullable(),
   createdAt: IsoDateTime,

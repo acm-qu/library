@@ -29,9 +29,9 @@ rsync -az --bwlimit=8000 --delete --exclude node_modules -e "ssh -i $KEY" dist/r
 ssh_ bash -s <<REMOTE
 set -euo pipefail
 cd $BASE/releases/$sha
-# Deploy work runs at the lowest CPU and IO priority, so the live site (and the account's 30 MB/s IO cap) come first.
+# Deploy work runs at the lowest CPU and IO priority on the worker's 2 cores, so the live site (and the account's 30 MB/s IO cap) come first.
 IONICE=\$(command -v ionice || true); [ -z "\$IONICE" ] && [ -x /usr/bin/ionice ] && IONICE=/usr/bin/ionice
-LOW="nice -n 19"; [ -n "\$IONICE" ] && LOW="\$IONICE -c3 \$LOW"
+LOW="taskset -c 2-3 nice -n 19"; [ -n "\$IONICE" ] && LOW="\$IONICE -c3 \$LOW"
 PATH=/opt/alt/alt-nodejs24/root/usr/bin:\$PATH \$LOW $NPM install --omit=dev --no-audit --no-fund --loglevel=error
 # The venv, the scorer weights and the tone-curve gate only depend on py/, the venv script and the gate's filters;
 # skip them (torch, ~0.6 GB of weights, minutes of scoring) when none changed since the last successful run.

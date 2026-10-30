@@ -23,7 +23,7 @@ export type Item = {
 };
 
 const CHUNK = 8 * 1024 * 1024;
-/** Per file. The server's disk IO is capped at 30 MB/s for everything; two uploads at this rate use at most a third. */
+/** Per file. The API also caps all uploads together at 5 MiB/s (media/throttle.ts); this keeps a single client polite. */
 export const UPLOAD_BPS = 5 * 1024 * 1024;
 const PARALLEL = 2;
 const RETRY = [0, 1000, 3000, 5000, 10_000, 20_000, 30_000];

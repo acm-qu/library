@@ -9,6 +9,7 @@ import { assetDir, tmpDir } from '@acm/core/paths';
 import { eq } from 'drizzle-orm';
 import { type Ctx, Permanent } from '../context.ts';
 import { getKeys, getOrCreateKeys } from '../lib/keys.ts';
+import { pacer } from '../lib/pace.ts';
 import { reconcileOriginal, wantsEncryption } from '../lib/seal.ts';
 import { type Out, publish } from './publish.ts';
 
@@ -36,8 +37,8 @@ export async function runRetier(ctx: Ctx, job: Job): Promise<'ok'> {
       const name = encrypt ? `${base}.enc` : base;
       const to = path.join(out, name);
       if (r.encrypted === encrypt) await copyFile(from, to);
-      else if (encrypt) await sealFile(from, to, keys!.fileKey, a.id);
-      else await openFileTo(from, to, keys!.fileKey, a.id);
+      else if (encrypt) await sealFile(from, to, keys!.fileKey, a.id, undefined, pacer());
+      else await openFileTo(from, to, keys!.fileKey, a.id, pacer());
       outs.push({ kind: r.kind, file: name, label: r.label, width: r.width, height: r.height, bandwidth: r.bandwidth, bytes: (await stat(to)).size, encrypted: encrypt });
     }
     await publish(ctx, a, out, outs, {});

@@ -29,7 +29,7 @@ beforeAll(async () => {
   await resetDb();
   const mk = async (email: string, role: 'member' | 'core', isFemale: boolean | null, isAdmin = false) => {
     const u = await addUser(email, { role, isAdmin, isFemale });
-    return { id: u.id, email: u.email, name: u.name, role, isAdmin, isFemale, status: 'active' } as Viewer;
+    return { id: u.id, email: u.email, name: u.name, role, isAdmin, isSuperadmin: false, isFemale, status: 'active' } as Viewer;
   };
   viewers = {
     member: await mk('m@x.qa', 'member', null),

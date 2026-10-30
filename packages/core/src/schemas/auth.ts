@@ -11,6 +11,8 @@ export const Me = z.object({
   name: z.string(),
   role: z.enum(ROLES),
   isAdmin: z.boolean(),
+  /** An active admin listed in SUPERADMINS: the only one who can make or remove admins. */
+  isSuperadmin: z.boolean(),
   isFemale: z.boolean().nullable(),
 });
 export type Me = z.infer<typeof Me>;

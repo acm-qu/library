@@ -4,7 +4,7 @@ import { type ButtonHTMLAttributes, useEffect, useId, useState } from 'react';
 import { Icon } from './Icon.tsx';
 import { usePopover } from './usePopover.ts';
 
-export type SelectOption<T extends string> = { value: T; label: string };
+export type SelectOption<T extends string> = { value: T; label: string; disabled?: boolean };
 
 type Props<T extends string> = {
   value: T;
@@ -25,6 +25,7 @@ export function Select<T extends string>({ value, options, onChange, variant = '
     p.setOpen(true);
   };
   const choose = (i: number) => {
+    if (options[i]!.disabled) return;
     onChange(options[i]!.value);
     p.close(true);
   };
@@ -87,7 +88,7 @@ export function Select<T extends string>({ value, options, onChange, variant = '
           aria-activedescendant={`${uid}-${active}`}
           onKeyDown={onListKey}>
           {options.map((o, i) => (
-            <div key={o.value} id={`${uid}-${i}`} role="option" aria-selected={i === sel} data-active={i === active || undefined} onPointerEnter={() => setActive(i)} onClick={() => choose(i)}>
+            <div key={o.value} id={`${uid}-${i}`} role="option" aria-selected={i === sel} aria-disabled={o.disabled || undefined} data-active={i === active || undefined} onPointerEnter={() => setActive(i)} onClick={() => choose(i)}>
               {o.label}
               {i === sel && <Icon name="check2" size="sm" />}
             </div>

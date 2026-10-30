@@ -101,15 +101,15 @@ def extract(ffmpeg: str, src: str, t: float, size: tuple[int, int], kind: str, t
     return frames[0]
 
 
-SOURCE_READ_BPS = 8 * 2**20  # the worker's share of the account's 30 MB/s disk budget (same as the encode)
+SOURCE_READ_BPS = 5 * 2**20  # the worker's share of the account's 30 MB/s disk budget (same as the encode)
 
 
 def readrate(src: str, duration: float) -> list[str]:
-    """ffmpeg -readrate so a whole-file scan reads no faster than SOURCE_READ_BPS (0.25x to 20x real time)."""
+    """ffmpeg -readrate so a whole-file scan reads no faster than SOURCE_READ_BPS (0.05x to 20x real time)."""
     size = os.path.getsize(src)
     if size <= 0 or duration <= 0:
         return []
-    return ["-readrate", f"{min(20.0, max(0.25, SOURCE_READ_BPS / (size / duration))):.2f}"]
+    return ["-readrate", f"{min(20.0, max(0.05, SOURCE_READ_BPS / (size / duration))):.2f}"]
 
 
 def proxy_scan(ffmpeg: str, src: str, p: Probe, kind: str, long_edge: int = 160, timeout: float = 1800) -> list[Proxy]:

@@ -78,3 +78,10 @@ def test_cli_reports_decode_errors_as_json(tmp_path):
     p = subprocess.run([sys.executable, "-m", "mediaworker", "images", "--src", str(bad), "--out", str(tmp_path / "o")], capture_output=True, text=True)
     assert p.returncode == 1
     assert json.loads(p.stdout)["error"]
+
+
+def test_refuses_images_over_120_megapixels(tmp_path):
+    big = tmp_path / "big.png"
+    Image.new("1", (11_000, 11_000)).save(big)  # 121 MP, 1 bit per pixel so the test stays small
+    with pytest.raises(Image.DecompressionBombError):
+        images.process(str(big), str(tmp_path / "o"))

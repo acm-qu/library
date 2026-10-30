@@ -35,11 +35,15 @@ export function registerSessions(app: FastifyInstance, db: Db, cfg: ServerConfig
       reply.clearCookie(SESSION_COOKIE, { path: '/' });
       return;
     }
-    req.viewer = s.viewer;
+    req.viewer = { ...s.viewer, isSuperadmin: isSuperadmin(cfg, s.viewer) };
     req.sessionId = s.sessionId;
     if (s.refreshedExpiry) reply.setCookie(SESSION_COOKIE, token, cookieOptions(cfg, s.refreshedExpiry));
   });
 }
+
+/** A super admin is an active admin listed in SUPERADMINS; listing alone grants nothing. */
+export const isSuperadmin = (cfg: ServerConfig, u: { email: string; isAdmin: boolean; status: string }) =>
+  u.isAdmin && u.status === 'active' && cfg.SUPERADMINS.includes(u.email);
 
 export async function requireUser(req: FastifyRequest, _reply: FastifyReply) {
   if (!req.viewer) throw new HttpError('unauthorized');
@@ -59,7 +63,7 @@ export async function requireAdmin(req: FastifyRequest, _reply: FastifyReply) {
 }
 
 /** Signed-out visitors read like a member: everything member-tier is public, core stays 404. Matches no uploader. */
-export const ANON: Viewer = { id: '00000000-0000-0000-0000-000000000000', email: '', name: '', role: 'member', isAdmin: false, status: 'active', isFemale: null };
+export const ANON: Viewer = { id: '00000000-0000-0000-0000-000000000000', email: '', name: '', role: 'member', isAdmin: false, isSuperadmin: false, status: 'active', isFemale: null };
 
 /** For read-only routes open to everyone. Until their profile is complete, a signed-in person reads like a visitor. */
 export const readerOf = (req: FastifyRequest): Viewer => (req.viewer && profileComplete(req.viewer) ? req.viewer : ANON);

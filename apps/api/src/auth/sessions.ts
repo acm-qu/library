@@ -31,7 +31,7 @@ export async function createSession(db: Db, userId: string, meta: SessionMeta, n
   return { token, expiresAt };
 }
 
-export type SessionLookup = { viewer: Viewer; sessionId: string; refreshedExpiry: Date | null };
+export type SessionLookup = { viewer: Omit<Viewer, 'isSuperadmin'>; sessionId: string; refreshedExpiry: Date | null };
 
 /** Resolve a cookie token to an active viewer, sliding the session. Returns null for anything invalid. */
 export async function lookupSession(db: Db, token: string | undefined, now = new Date()): Promise<SessionLookup | null> {

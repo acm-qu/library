@@ -78,6 +78,10 @@ class Scorer:
         import pyiqa
 
         torch.set_num_threads(threads)
+        try:
+            torch.set_num_interop_threads(1)  # one inter-op thread instead of one per core (NPROC)
+        except RuntimeError:
+            pass  # torch allows it once per process, before any parallel work: an earlier Scorer set it
         self._torch = torch
         with contextlib.redirect_stdout(sys.stderr):  # pyiqa logs to stdout; stdout carries our JSON
             self.metrics = {m: pyiqa.create_metric(PYIQA_NAMES[m], device=torch.device("cpu")) for m in METRICS}
