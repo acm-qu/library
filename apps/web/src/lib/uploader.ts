@@ -84,10 +84,14 @@ function startOne(it: Item) {
   });
   uploads.set(it.key, up);
   patch(it.key, { status: 'uploading', reason: undefined });
-  void up.findPreviousUploads().then((prev) => {
-    if (prev[0]) up.resumeFromPreviousUpload(prev[0]);
-    up.start();
-  });
+  // If the saved resume state can't be read (storage blocked or full), start fresh rather than sit at 0% forever.
+  void up
+    .findPreviousUploads()
+    .catch(() => [])
+    .then((prev) => {
+      if (prev[0]) up.resumeFromPreviousUpload(prev[0]);
+      up.start();
+    });
 }
 
 export const isVideo = (f: File) => f.type.startsWith('video/') || /\.(mov|mp4|m4v)$/i.test(f.name);

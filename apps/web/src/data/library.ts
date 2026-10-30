@@ -14,7 +14,7 @@ export function useEvents(f: api.EventFilters) {
 
 export const useYears = () => useQuery({ queryKey: ['events', 'years'], queryFn: api.getYears, staleTime: 10 * 60_000 });
 
-export const useEvent = (idOrSlug: string) => useQuery({ queryKey: ['event', idOrSlug], queryFn: () => api.getEvent(idOrSlug) });
+export const useEvent = (idOrSlug: string) => useQuery({ queryKey: ['event', idOrSlug], queryFn: () => api.getEvent(idOrSlug), enabled: !!idOrSlug });
 
 /** Polls every 15 s while any loaded tile is still uploading, queued or processing (core members only see those). */
 export function useEventAssets(eventId: string | undefined, f: api.AssetFilters) {
