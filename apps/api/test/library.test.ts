@@ -1,4 +1,4 @@
-import { appSettings, assets, auditLog, events, jobs, renditions } from '@acm/core/db';
+import { appSettings, assets, auditLog, events, jobs, renditions, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -8,8 +8,8 @@ import { addUser, db, H, useApp } from './helpers.ts';
 const t = useApp();
 let member: string, core: string, admin: string, coreId: string, adminId: string;
 
-async function cookieFor(email: string, role: 'member' | 'core', isAdmin = false, gender: 'male' | 'female' = 'female') {
-  const u = await addUser(email, { role, isAdmin, gender });
+async function cookieFor(email: string, role: 'member' | 'core', isAdmin = false, isFemale = true) {
+  const u = await addUser(email, { role, isAdmin, isFemale });
   return { id: u.id, sid: (await createSession(db, u.id, { ip: null, userAgent: null })).token };
 }
 const get = (url: string, sid: string) => t.app.inject({ method: 'GET', url, cookies: { sid } });
@@ -99,8 +99,8 @@ describe('signed-out visitors', () => {
 
 describe('girls only', () => {
   it('shows girls-only items, and events holding only them, to female core members alone; the uploader keeps a status row', async () => {
-    const { sid: maleAdmin } = await cookieFor('ma@qu.edu.qa', 'core', true, 'male');
-    const { sid: maleCore, id: maleId } = await cookieFor('mc@qu.edu.qa', 'core', false, 'male');
+    const { sid: maleAdmin } = await cookieFor('ma@qu.edu.qa', 'core', true, false);
+    const { sid: maleCore, id: maleId } = await cookieFor('mc@qu.edu.qa', 'core', false, false);
     const mixed = await addEvent('Mixed', '2026-10-17');
     const girlsNight = await addEvent('Girls night', '2026-10-01');
     const pub = await addAsset(mixed);
@@ -142,6 +142,16 @@ describe('girls only', () => {
       ['asset.girls_only', { from: true, to: false }],
       ['asset.girls_only', { from: false, to: true }],
     ]);
+  });
+
+  it('decides by is_female alone, not the deprecated gender text', async () => {
+    const girls = await addAsset(await addEvent('Mixed', '2026-10-17'), { girlsOnly: true });
+    const { sid: female } = await cookieFor('f@qu.edu.qa', 'core');
+    const legacyOnly = await addUser('l@qu.edu.qa', { isFemale: null, gender: 'female' });
+    const legacy = (await createSession(db, legacyOnly.id, { ip: null, userAgent: null })).token;
+    expect((await db.select().from(users).where(eq(users.email, 'f@qu.edu.qa')))[0]).toMatchObject({ isFemale: true, gender: null });
+    expect((await get(`/api/assets/${girls}`, female)).json()).toMatchObject({ girlsOnly: true });
+    expect((await get(`/api/assets/${girls}`, legacy)).statusCode).toBe(404);
   });
 });
 

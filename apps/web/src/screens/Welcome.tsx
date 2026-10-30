@@ -1,5 +1,5 @@
 // First sign-in: name and gender are required before any other signed-in screen (the shell sends people here).
-import { type Gender, profileComplete } from '@acm/core/schemas';
+import { profileComplete } from '@acm/core/schemas';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useSearchParams } from 'react-router';
@@ -13,7 +13,7 @@ export function WelcomeScreen() {
   const me = useMe().data!;
   const [params] = useSearchParams();
   const [name, setName] = useState(me.name);
-  const [gender, setGender] = useState<Gender | null>(me.gender);
+  const [isFemale, setIsFemale] = useState(me.isFemale);
   const [tried, setTried] = useState(false);
   const patch = usePatchMe();
   useEffect(() => {
@@ -37,7 +37,7 @@ export function WelcomeScreen() {
         onSubmit={(e) => {
           e.preventDefault();
           setTried(true);
-          if (!nameMissing && gender) patch.mutate({ name: name.trim(), gender });
+          if (!nameMissing && isFemale !== null) patch.mutate({ name: name.trim(), isFemale });
         }}
       >
         <div className="field">
@@ -47,8 +47,8 @@ export function WelcomeScreen() {
           <input className="input" id="wn" value={name} maxLength={120} autoComplete="name" onChange={(e) => setName(e.target.value)} aria-invalid={(tried && nameMissing) || undefined} />
           <span className="help">{t('account.nameHelp')}</span>
         </div>
-        <GenderRadio id="wg" value={gender} onChange={setGender} invalid={tried && !gender} />
-        {tried && (nameMissing || !gender) && (
+        <GenderRadio id="wg" value={isFemale} onChange={setIsFemale} invalid={tried && isFemale === null} />
+        {tried && (nameMissing || isFemale === null) && (
           <span className="err" role="alert">
             <Icon name="alert" size="sm" style={{ marginTop: 3 }} />
             {t('welcome.required')}

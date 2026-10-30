@@ -1,5 +1,4 @@
 // Account board: profile name and gender, display preferences, sign out / sign out everywhere.
-import type { Gender } from '@acm/core/schemas';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
@@ -13,8 +12,8 @@ export function AccountScreen() {
   const { t, i18n } = useTranslation();
   const me = useMe().data!;
   const [name, setName] = useState(me.name);
-  const [gender, setGender] = useState<Gender | null>(me.gender);
-  const unchanged = name.trim() === me.name && gender === me.gender;
+  const [isFemale, setIsFemale] = useState(me.isFemale);
+  const unchanged = name.trim() === me.name && isFemale === me.isFemale;
   const patch = usePatchMe();
   const logout = useLogout(false);
   const logoutAll = useLogout(true);
@@ -42,7 +41,7 @@ export function AccountScreen() {
           style={{ gap: 20 }}
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim() && gender) patch.mutate({ name: name.trim(), gender });
+            if (name.trim() && isFemale !== null) patch.mutate({ name: name.trim(), isFemale });
           }}
         >
           <div className="field">
@@ -52,8 +51,8 @@ export function AccountScreen() {
             <input className="input" id="nm" value={name} maxLength={120} autoComplete="name" onChange={(e) => setName(e.target.value)} aria-invalid={!name.trim() || undefined} />
             <span className="help">{t('account.nameHelp')}</span>
           </div>
-          <GenderRadio id="gd" value={gender} onChange={setGender} />
-          <button className="btn btn-s" type="submit" style={{ alignSelf: 'flex-start' }} disabled={patch.isPending || unchanged || !name.trim() || !gender}>
+          <GenderRadio id="gd" value={isFemale} onChange={setIsFemale} />
+          <button className="btn btn-s" type="submit" style={{ alignSelf: 'flex-start' }} disabled={patch.isPending || unchanged || !name.trim() || isFemale === null}>
             {patch.isSuccess && unchanged ? (
               <>
                 <Icon name="ok" />

@@ -1,4 +1,4 @@
-import { AdminAccessRequestPage, AdminJobPage, AdminUser, AppSettings, BulkUsersResult, ComputeReport, type Gender, ProcessingReport, StorageReport } from '@acm/core/schemas';
+import { AdminAccessRequestPage, AdminJobPage, AdminUser, AppSettings, BulkUsersResult, ComputeReport, ProcessingReport, StorageReport } from '@acm/core/schemas';
 import { z } from 'zod';
 import { call, q } from './client.ts';
 
@@ -9,7 +9,7 @@ export const UsersPage = z.object({
 });
 export type UserFilter = { q?: string; status?: 'active' | 'disabled' };
 export const getUsers = (f: UserFilter, cursor?: string) => call(UsersPage, `/admin/users${q({ ...f, cursor, limit: 50 })}`);
-export const createUser = (b: { email: string; name: string; gender: Gender | null; isAdmin: boolean }) => call(z.object({ id: z.string() }), '/admin/users', { method: 'POST', json: b });
+export const createUser = (b: { email: string; name: string; isFemale: boolean | null; isAdmin: boolean }) => call(z.object({ id: z.string() }), '/admin/users', { method: 'POST', json: b });
 export const bulkUsers = (emails: string, isAdmin: boolean) => call(BulkUsersResult, '/admin/users/bulk', { method: 'POST', json: { emails: [emails], isAdmin } });
 export const patchUser = (id: string, b: Partial<{ isAdmin: boolean; status: 'active' | 'disabled'; name: string }>) =>
   call(null, `/admin/users/${id}`, { method: 'PATCH', json: b });

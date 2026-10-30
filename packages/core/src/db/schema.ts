@@ -27,6 +27,7 @@ import {
   ASSET_STATUSES,
   CURVE_SOURCES,
   GENDERS,
+  type Gender,
   HDR_FORMATS,
   JOB_KINDS,
   JOB_OUTCOMES,
@@ -47,6 +48,13 @@ const created = () => ts('created_at').notNull().defaultNow();
 const inList = (col: string, values: readonly string[]) =>
   sql.raw(`${col} in (${values.map((v) => `'${v}'`).join(',')})`);
 
+/** The deprecated gender text for an is_female value, so a rolled-back release still reads correct data. */
+export function legacyGender(isFemale: boolean): Gender;
+export function legacyGender(isFemale: boolean | null): Gender | null;
+export function legacyGender(isFemale: boolean | null): Gender | null {
+  return isFemale === null ? null : isFemale ? 'female' : 'male';
+}
+
 export const users = pgTable(
   'users',
   {
@@ -57,6 +65,8 @@ export const users = pgTable(
     isAdmin: boolean('is_admin').notNull().default(false),
     status: text('status', { enum: USER_STATUSES }).notNull().default('active'),
     // Null until the person completes their profile on first sign-in (or an admin sets it).
+    isFemale: boolean('is_female'),
+    /** @deprecated dropped once no release reads it; written alongside is_female for rollback. */
     gender: text('gender', { enum: GENDERS }),
     createdBy: uuid('created_by'),
     createdAt: created(),
@@ -79,6 +89,8 @@ export const accessRequests = pgTable(
     id: uuid('id').primaryKey(),
     email: text('email').notNull(),
     name: text('name').notNull(),
+    isFemale: boolean('is_female'),
+    /** @deprecated dropped once no release reads it; written alongside is_female for rollback. */
     gender: text('gender', { enum: GENDERS }).notNull(),
     status: text('status', { enum: ACCESS_REQUEST_STATUSES }).notNull().default('pending'),
     createdAt: created(),

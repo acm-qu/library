@@ -10,8 +10,8 @@ import { browsable, listed } from '../src/policy/visibleSql.ts';
 import { addUser, db, resetDb } from './helpers.ts';
 
 // Uploads come from a male and a female core member; only female core members (admins included) see girls-only rows.
-type Who = 'member' | 'core' | 'core-uploader' | 'admin' | 'core-f' | 'core-f-uploader' | 'admin-f' | 'core-nogender';
-const WHO: Who[] = ['member', 'core', 'core-uploader', 'admin', 'core-f', 'core-f-uploader', 'admin-f', 'core-nogender'];
+type Who = 'member' | 'core' | 'core-uploader' | 'admin' | 'core-f' | 'core-f-uploader' | 'admin-f' | 'core-unset';
+const WHO: Who[] = ['member', 'core', 'core-uploader', 'admin', 'core-f', 'core-f-uploader', 'admin-f', 'core-unset'];
 const UPLOADERS = ['core-uploader', 'core-f-uploader'] as const;
 const FEMALE = new Set<Who>(['core-f', 'core-f-uploader', 'admin-f']);
 const ADMIN = new Set<Who>(['admin', 'admin-f']);
@@ -27,19 +27,19 @@ let viewers: Record<Who, Viewer>;
 
 beforeAll(async () => {
   await resetDb();
-  const mk = async (email: string, role: 'member' | 'core', gender: 'male' | 'female' | null, isAdmin = false) => {
-    const u = await addUser(email, { role, isAdmin, gender });
-    return { id: u.id, email: u.email, name: u.name, role, isAdmin, gender, status: 'active' } as Viewer;
+  const mk = async (email: string, role: 'member' | 'core', isFemale: boolean | null, isAdmin = false) => {
+    const u = await addUser(email, { role, isAdmin, isFemale });
+    return { id: u.id, email: u.email, name: u.name, role, isAdmin, isFemale, status: 'active' } as Viewer;
   };
   viewers = {
     member: await mk('m@x.qa', 'member', null),
-    core: await mk('c@x.qa', 'core', 'male'),
-    'core-uploader': await mk('u@x.qa', 'core', 'male'),
-    admin: await mk('a@x.qa', 'core', 'male', true),
-    'core-f': await mk('cf@x.qa', 'core', 'female'),
-    'core-f-uploader': await mk('uf@x.qa', 'core', 'female'),
-    'admin-f': await mk('af@x.qa', 'core', 'female', true),
-    'core-nogender': await mk('cn@x.qa', 'core', null),
+    core: await mk('c@x.qa', 'core', false),
+    'core-uploader': await mk('u@x.qa', 'core', false),
+    admin: await mk('a@x.qa', 'core', false, true),
+    'core-f': await mk('cf@x.qa', 'core', true),
+    'core-f-uploader': await mk('uf@x.qa', 'core', true),
+    'admin-f': await mk('af@x.qa', 'core', true, true),
+    'core-unset': await mk('cn@x.qa', 'core', null),
   };
   const eventId = newId();
   await db.insert(events).values({ id: eventId, title: 'E', slug: 'e', startsOn: '2026-10-01', createdBy: viewers.core.id });

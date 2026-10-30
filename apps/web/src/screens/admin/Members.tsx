@@ -1,7 +1,7 @@
 // Admin · Members: list with search and filters, add one, paste a list, admin/status with confirmations, and the
 // Requests tab ("Request access" from the sign-in screen) with approve / reject.
 // Every account is core; admin is the only difference (signed-out visitors already see everything public).
-import type { AdminAccessRequest, AdminUser, Gender } from '@acm/core/schemas';
+import type { AdminAccessRequest, AdminUser } from '@acm/core/schemas';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as api from '../../api/admin.ts';
@@ -152,7 +152,7 @@ export function MembersScreen() {
                     </div>
                   </div>
                 </td>
-                <td>{u.gender ? t(`gender.${u.gender}`) : <span className="muted">{t('gender.unset')}</span>}</td>
+                <td>{u.isFemale === null ? <span className="muted">{t('gender.unset')}</span> : t(u.isFemale ? 'gender.female' : 'gender.male')}</td>
                 <td>
                   {u.isAdmin ? (
                     <span className="tier">
@@ -261,7 +261,7 @@ function Requests() {
                       <bdi className="t-sm muted">{r.email}</bdi>
                     </div>
                   </td>
-                  <td>{t(`gender.${r.gender}`)}</td>
+                  <td>{r.isFemale === null ? <span className="muted">{t('gender.unset')}</span> : t(r.isFemale ? 'gender.female' : 'gender.male')}</td>
                   <td className="tnum t-sm muted">{fmtDateTime(r.createdAt)}</td>
                   <td>
                     <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
@@ -290,7 +290,7 @@ function Requests() {
 
 function AddOne({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
-  const [f, setF] = useState({ email: '', name: '', gender: null as Gender | null, isAdmin: false });
+  const [f, setF] = useState({ email: '', name: '', isFemale: null as boolean | null, isAdmin: false });
   const [err, setErr] = useState<string | null>(null);
   const add = useAdminMutation((b: typeof f) => api.createUser(b));
   const submit = async () => {
@@ -332,7 +332,7 @@ function AddOne({ onClose }: { onClose: () => void }) {
           <Select id="ar" value={f.isAdmin ? 'admin' : 'core'} options={roleOptions(t)} onChange={(v) => setF({ ...f, isAdmin: v === 'admin' })} />
         </div>
       </div>
-      <GenderRadio id="ag" value={f.gender} onChange={(gender) => setF({ ...f, gender })} />
+      <GenderRadio id="ag" value={f.isFemale} onChange={(isFemale) => setF({ ...f, isFemale })} />
       {err && (
         <span className="err" role="alert">
           <Icon name="alert" size="sm" style={{ marginTop: 3 }} />

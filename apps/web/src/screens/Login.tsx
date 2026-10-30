@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client.ts';
-import type { Gender } from '@acm/core/schemas';
 import { useRequestAccess, useRequestCode, useVerify } from '../data/session.ts';
 import { safeNext } from '../lib/safeNext.ts';
 import { toggleTheme, useTheme } from '../lib/theme.ts';
@@ -266,7 +265,7 @@ export function LoginScreen() {
 function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
   const { t } = useTranslation();
   const [f, setF] = useState({ email: initialEmail, name: '' });
-  const [gender, setGender] = useState<Gender | null>(null);
+  const [isFemale, setIsFemale] = useState<boolean | null>(null);
   const [error, setError] = useState<'invalid' | 'required' | 'rate' | 'network' | null>(null);
   const [sent, setSent] = useState(false);
   const req = useRequestAccess();
@@ -287,10 +286,10 @@ function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack:
   async function submit() {
     const email = f.email.trim().toLowerCase();
     if (!EMAIL_RE.test(email)) return setError('invalid');
-    if (!f.name.trim() || !gender) return setError('required');
+    if (!f.name.trim() || isFemale === null) return setError('required');
     setError(null);
     try {
-      await req.mutateAsync({ email, name: f.name.trim(), gender });
+      await req.mutateAsync({ email, name: f.name.trim(), isFemale });
       setSent(true);
     } catch (e) {
       setError(e instanceof ApiError && e.code === 'rate_limited' ? 'rate' : e instanceof ApiError && e.code === 'bad_request' ? 'invalid' : 'network');
@@ -339,7 +338,7 @@ function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack:
           </label>
           <input className="input" id="ra-n" autoComplete="name" maxLength={120} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-invalid={(error === 'required' && !f.name.trim()) || undefined} />
         </div>
-        <GenderRadio id="ra-g" value={gender} onChange={setGender} invalid={error === 'required' && !gender} />
+        <GenderRadio id="ra-g" value={isFemale} onChange={setIsFemale} invalid={error === 'required' && isFemale === null} />
         {error && (
           <span className="err" role="alert">
             <Icon name="alert" size="sm" style={{ marginTop: 3 }} />

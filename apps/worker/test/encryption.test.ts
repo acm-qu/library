@@ -135,7 +135,7 @@ describe('core-tier video', () => {
 
     // Girls-only: a male admin gets 404 for everything, a female core member (coreSid) still gets it all.
     await db.update(assets).set({ girlsOnly: true }).where(eq(assets.id, id));
-    const maleAdmin = (await createSession(db, (await addUser('ma@x.qa', { role: 'core', isAdmin: true, gender: 'male' })).id, { ip: null, userAgent: null })).token;
+    const maleAdmin = (await createSession(db, (await addUser('ma@x.qa', { role: 'core', isAdmin: true, isFemale: false })).id, { ip: null, userAgent: null })).token;
     const urls = [`/api/assets/${id}`, `/api/media/${id}/thumb`, `/api/media/${id}/original`, `/api/media/${id}/hls/key`];
     expect(await Promise.all(urls.map(async (u) => (await get(u, maleAdmin)).statusCode))).toEqual([404, 404, 404, 404]);
     expect(await Promise.all(urls.map(async (u) => (await get(u, coreSid)).statusCode))).toEqual([200, 200, 200, 200]);

@@ -341,7 +341,7 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
 - `assets.rendition_rev` drives cache busting.
 - `jobs.priority` backs both kind-based ordering and "Move to the top".
 - `jobs.outcome` records a job that finished by sending its asset to review.
-- `users.gender` (nullable, check male|female) is asked for on first sign-in, together with the name.
+- `users.is_female` (nullable boolean; migrations `0005` and `0006` add it and backfill it from `gender`) is asked for on first sign-in, together with the name. The older `gender` text column (check male|female) is deprecated: the app reads only `is_female` but writes the matching `gender` alongside for one release, so a rollback still sees correct data, and a later migration drops it. `access_requests` carries the same pair.
 - `assets.girls_only` (boolean, not null, default false; migration `0004`) marks an item only female core members may see. It narrows who sees the item; the tier still decides encryption, so toggling it re-seals nothing.
 - `access_requests` holds "Request access" submissions from the sign-in screen until an admin approves or rejects them.
 
@@ -355,7 +355,8 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
       { name: "role", type: "text check member|core · new accounts always core; member only on old rows, which can't sign in" },
       { name: "is_admin", type: "bool · check (not is_admin or role='core')" },
       { name: "status", type: "text check active|disabled" },
-      { name: "gender", type: "text check male|female · null until the profile is completed", nullable: true },
+      { name: "is_female", type: "bool · null until the profile is completed", nullable: true },
+      { name: "gender", type: "deprecated · text check male|female, written alongside is_female for rollback", nullable: true },
       { name: "created_by", type: "uuid", fk: "users.id", nullable: true },
       { name: "created_at", type: "timestamptz" },
       { name: "last_login_at", type: "timestamptz", nullable: true }
@@ -364,7 +365,8 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
       { name: "id", type: "uuid (v7, app)", pk: true },
       { name: "email", type: "text · check (email = lower(email)) · unique where status = 'pending'" },
       { name: "name", type: "text" },
-      { name: "gender", type: "text check male|female" },
+      { name: "is_female", type: "bool · null only on a row a rolled-back release filed", nullable: true },
+      { name: "gender", type: "deprecated · text check male|female, written alongside is_female" },
       { name: "status", type: "text check pending|approved|rejected, default pending" },
       { name: "created_at", type: "timestamptz" },
       { name: "decided_at", type: "timestamptz", nullable: true },
@@ -508,7 +510,7 @@ Every media route, asset read and HLS key request goes through one pure function
 
 Anything below the route's minimum is **404**, never 403. The design repeats this rule: signed-out visitors never learn that core items exist.
 
-**Girls only.** A girls-only item is visible only to an active, signed-in core viewer whose gender is female (female admins included). Everyone else gets `none`, so 404, whatever the tier: male core members, male admins, viewers without a gender, signed-out visitors, and a male uploader of the item. The same rule sits in `access()` and in the SQL twin (`tierOk` in `visibleSql.ts`), so counts, covers, grids and search agree. An event whose only items are girls-only is hidden from those viewers (core members otherwise see empty events). My uploads lists a viewer's own uploads without `access()` and carries only status, never media URLs, so a male uploader still sees his row there. Admin › Item and its actions (re-process, resolve, frames) 404 for a male admin; Admin › Processing keeps the job row, its counts and cancel, retry and move-to-top, but sends no item details (no filename, event or thumbnail).
+**Girls only.** A girls-only item is visible only to an active, signed-in core viewer whose `is_female` is true (female admins included). Everyone else gets `none`, so 404, whatever the tier: male core members, male admins, viewers whose `is_female` is null, signed-out visitors, and a male uploader of the item. The same rule sits in `access()` and in the SQL twin (`tierOk` in `visibleSql.ts`), so counts, covers, grids and search agree. An event whose only items are girls-only is hidden from those viewers (core members otherwise see empty events). My uploads lists a viewer's own uploads without `access()` and carries only status, never media URLs, so a male uploader still sees his row there. Admin › Item and its actions (re-process, resolve, frames) 404 for a male admin; Admin › Processing keeps the job row, its counts and cancel, retry and move-to-top, but sends no item details (no filename, event or thumbnail).
 
 Read routes need no sign-in. `readerOf()` in `apps/api/src/auth/plugin.ts` turns a request without a session into `ANON`, an active member-role viewer that matches no uploader, so member-tier items are public and everything else follows the same table. Account, upload and admin routes still need a core session. There are no member accounts any more: every account is core, admin is a flag on top, and an old member row can't sign in.
 
@@ -524,12 +526,12 @@ Read routes need no sign-in. `readerOf()` in `apps/api/src/auth/plugin.ts` turns
     ["deleting or soft-deleted, or event deleted", "404", "404", "404", "404"],
     ["any, user disabled (their sessions are deleted)", "reads as signed out", "reads as signed out", "reads as signed out", "reads as signed out"],
     ["account, upload or admin route without a session", "401", "—", "—", "—"],
-    ["signed in, name or gender missing", "—", "reads as signed out; core and admin routes 409 profile_incomplete", "same", "same"],
-    ["girls-only, any tier", "404", "female: as above · male or no gender: 404", "female: as above · male: 404 (My uploads keeps a status row)", "female: as above · male: 404; queue row without details"],
+    ["signed in, name or is_female missing", "—", "reads as signed out; core and admin routes 409 profile_incomplete", "same", "same"],
+    ["girls-only, any tier", "404", "female: as above · male or is_female null: 404", "female: as above · male: 404 (My uploads keeps a status row)", "female: as above · male: 404; queue row without details"],
   ]}
 />
 
-Signed-out visitors also never see uploader names. The test suite enumerates every viewer × tier × status × girls-only × uploader × deleted combination (8 viewers: signed out, male and female core, male and female uploader, male and female admin, core without gender; 2 × 8 × 2 × 2 × 2 = 128 asset rows) against this table, as the handoff's security checklist requires.
+Signed-out visitors also never see uploader names. The test suite enumerates every viewer × tier × status × girls-only × uploader × deleted combination (8 viewers: signed out, male and female core, male and female uploader, male and female admin, core with is_female null; 2 × 8 × 2 × 2 × 2 = 128 asset rows) against this table, as the handoff's security checklist requires.
 
 ### Asset lifecycle
 
@@ -604,9 +606,9 @@ Signed-out visitors also never see uploader names. The test suite enumerates eve
 
 Unknown and disabled emails, and old member rows (only core accounts sign in), get a decoy code row. Without it, an unknown email could only ever return "expired" from verify, never "wrong code, 3 attempts left", and that difference would reveal who is registered. A decoy can never verify, because its hash matches no code and verify also re-checks `status = 'active'`.
 
-**Request access.** The Login screen links to a small form (email, name, gender). `POST /auth/request-access` takes the CSRF header, is limited to 5 an hour per IP and 3 a day per email, and always answers 204 after the same timing floor as request-code. It inserts a pending `access_requests` row only when the email is neither a user nor already pending (the partial unique index settles races), so the answer never reveals who has an account. Admins see pending requests under Admin › Members › Requests. Approve creates an active, non-admin core user with the request's name and gender in one transaction, marks the request approved and writes `audit_log` (409 if that email became a user meanwhile); the "You've been approved" mail with a link to `/login` goes out after the response. Reject only marks the request and audits it.
+**Request access.** The Login screen links to a small form (email, name, gender). `POST /auth/request-access` takes the CSRF header, is limited to 5 an hour per IP and 3 a day per email, and always answers 204 after the same timing floor as request-code. It inserts a pending `access_requests` row only when the email is neither a user nor already pending (the partial unique index settles races), so the answer never reveals who has an account. Admins see pending requests under Admin › Members › Requests. Approve creates an active, non-admin core user with the request's name and `is_female` (and the matching `gender`) in one transaction, marks the request approved and writes `audit_log` (409 if that email became a user meanwhile); the "You've been approved" mail with a link to `/login` goes out after the response. Reject only marks the request and audits it.
 
-**First sign-in.** A signed-in person whose name is empty or gender is null completes their profile first. The web shell redirects every signed-in screen to `/welcome?next=…` (signed-out visitors are unaffected), and Continue PATCHes `/me` and goes on to `next`. The API enforces it too: `requireCore` and `requireAdmin` answer 409 `profile_incomplete`, and `readerOf()` treats the person as ANON, so public reads keep working but core items stay hidden. `/me` (GET and PATCH) and `/auth/*` keep working. While `PRELAUNCH_ALLOWLIST` is set, only allowlisted addresses can sign in, approved or not.
+**First sign-in.** A signed-in person whose name is empty or `is_female` is null completes their profile first. The web shell redirects every signed-in screen to `/welcome?next=…` (signed-out visitors are unaffected), and Continue PATCHes `/me` and goes on to `next`. The API enforces it too: `requireCore` and `requireAdmin` answer 409 `profile_incomplete`, and `readerOf()` treats the person as ANON, so public reads keep working but core items stay hidden. `/me` (GET and PATCH) and `/auth/*` keep working. While `PRELAUNCH_ALLOWLIST` is set, only allowlisted addresses can sign in, approved or not.
 
 Sessions slide: each authenticated request refreshes `expires_at` at most once an hour and `last_seen_at` at most every 5 minutes, so reads don't turn into a write per request. Signing in drops any session the browser already held (another user on a shared PC). Logging out deletes one session row. "Sign out of all devices", and disabling a user, delete all of that user's rows.
 
@@ -1240,6 +1242,7 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
     ["Events", "Core members edit events (event page, Admin › Events); admins delete them. No cover picker or cover banner: Library cards use the automatic cover"],
     ["Registration", "Request access from the sign-in screen; an admin approves (creating a core account and mailing a sign-in link) or rejects. The answer is the same 204 whether or not the email has an account"],
     ["Profile", "Gender (male or female) and name are required: asked on first sign-in at /welcome, enforced by the shell and by 409 profile_incomplete on core and admin routes"],
+    ["Gender storage", "Gender is stored as the is_female boolean (isFemale on the wire; the UI keeps Male / Female); the old gender text column is written alongside for one release and then dropped"],
     ["OTP sender", "noreply@qu.acm.org, shown as \"ACM Library\", through SMTP host mail.qu.acm.org (TLS certificate covers *.qu.acm.org)"],
     ["Where releases are built", "On the laptop; bundles are rsynced (scripts/deploy.sh)"],
     ["Automatic tone-curve selection", "Admin checkbox, default off, works when ticked; the validation gate is information only; hable203 otherwise"],

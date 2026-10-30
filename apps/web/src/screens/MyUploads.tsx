@@ -107,7 +107,7 @@ export function MyUploadsScreen() {
             </div>
             <ul className="filelist panel" style={{ padding: 0 }}>
               {collapse(g.rows).map((r) => (
-                <Row key={r.item.assetId} r={r} isAdmin={me.isAdmin} female={me.gender === 'female'} />
+                <Row key={r.item.assetId} r={r} isAdmin={me.isAdmin} female={me.isFemale === true} />
               ))}
             </ul>
           </section>

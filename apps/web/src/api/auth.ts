@@ -1,4 +1,4 @@
-import { type Gender, Me } from '@acm/core/schemas';
+import { Me } from '@acm/core/schemas';
 import { ApiError, call } from './client.ts';
 
 export const requestCode = (email: string) => call(null, '/auth/request-code', { method: 'POST', json: { email } });
@@ -15,5 +15,5 @@ export async function getMe(): Promise<Me | null> {
     throw e;
   }
 }
-export const patchMe = (b: { name: string; gender: Gender }) => call(Me, '/me', { method: 'PATCH', json: b });
-export const requestAccess = (b: { email: string; name: string; gender: Gender }) => call(null, '/auth/request-access', { method: 'POST', json: b });
+export const patchMe = (b: { name: string; isFemale: boolean }) => call(Me, '/me', { method: 'PATCH', json: b });
+export const requestAccess = (b: { email: string; name: string; isFemale: boolean }) => call(null, '/auth/request-access', { method: 'POST', json: b });

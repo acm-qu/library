@@ -1,8 +1,12 @@
-// Male / Female as two radio chips (same pattern as the theme picker on Account).
-import { GENDERS, type Gender } from '@acm/core/schemas';
+// Male / Female as two radio chips (same pattern as the theme picker on Account); the value is isFemale.
 import { useTranslation } from 'react-i18next';
 
-export function GenderRadio({ id, value, onChange, invalid }: { id: string; value: Gender | null; onChange: (g: Gender) => void; invalid?: boolean }) {
+const OPTIONS = [
+  [false, 'gender.male'],
+  [true, 'gender.female'],
+] as const;
+
+export function GenderRadio({ id, value, onChange, invalid }: { id: string; value: boolean | null; onChange: (isFemale: boolean) => void; invalid?: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="field">
@@ -10,9 +14,9 @@ export function GenderRadio({ id, value, onChange, invalid }: { id: string; valu
         {t('gender.label')}
       </span>
       <div role="radiogroup" aria-labelledby={id} aria-invalid={invalid || undefined} className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-        {GENDERS.map((g) => (
-          <button key={g} type="button" className="chip" role="radio" aria-checked={value === g} aria-pressed={value === g} onClick={() => onChange(g)}>
-            {t(`gender.${g}`)}
+        {OPTIONS.map(([f, key]) => (
+          <button key={key} type="button" className="chip" role="radio" aria-checked={value === f} aria-pressed={value === f} onClick={() => onChange(f)}>
+            {t(key)}
           </button>
         ))}
       </div>

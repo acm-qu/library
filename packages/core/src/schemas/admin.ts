@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ACCESS_REQUEST_STATUSES, ASSET_STATUSES, GENDERS, JOB_KINDS, JOB_STATES, ROLES, TONE_CURVES, USER_STATUSES } from '../enums.ts';
+import { ACCESS_REQUEST_STATUSES, ASSET_STATUSES, JOB_KINDS, JOB_STATES, ROLES, TONE_CURVES, USER_STATUSES } from '../enums.ts';
 import { Email, Id, IsoDateTime, page, PageQuery } from './common.ts';
 
 export const AdminUser = z.object({
@@ -9,7 +9,7 @@ export const AdminUser = z.object({
   role: z.enum(ROLES),
   isAdmin: z.boolean(),
   status: z.enum(USER_STATUSES),
-  gender: z.enum(GENDERS).nullable(),
+  isFemale: z.boolean().nullable(),
   createdAt: IsoDateTime,
   lastLoginAt: IsoDateTime.nullable(),
 });
@@ -22,7 +22,7 @@ export const AdminUserQuery = PageQuery.extend({
 export const CreateUserBody = z.object({
   email: Email,
   name: z.string().trim().max(120).default(''),
-  gender: z.enum(GENDERS).nullable().default(null),
+  isFemale: z.boolean().nullable().default(null),
   isAdmin: z.boolean().default(false),
 });
 export const BulkUsersBody = z.object({ emails: z.array(z.string()).min(1).max(1000), isAdmin: z.boolean().default(false) });
@@ -38,7 +38,7 @@ export const AdminAccessRequest = z.object({
   id: Id,
   email: z.string(),
   name: z.string(),
-  gender: z.enum(GENDERS),
+  isFemale: z.boolean().nullable(), // null only for a request a rolled-back release filed after the backfill
   status: z.enum(ACCESS_REQUEST_STATUSES),
   createdAt: IsoDateTime,
   decidedAt: IsoDateTime.nullable(),

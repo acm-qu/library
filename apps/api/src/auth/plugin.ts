@@ -59,7 +59,7 @@ export async function requireAdmin(req: FastifyRequest, _reply: FastifyReply) {
 }
 
 /** Signed-out visitors read like a member: everything member-tier is public, core stays 404. Matches no uploader. */
-export const ANON: Viewer = { id: '00000000-0000-0000-0000-000000000000', email: '', name: '', role: 'member', isAdmin: false, status: 'active', gender: null };
+export const ANON: Viewer = { id: '00000000-0000-0000-0000-000000000000', email: '', name: '', role: 'member', isAdmin: false, status: 'active', isFemale: null };
 
 /** For read-only routes open to everyone. Until their profile is complete, a signed-in person reads like a visitor. */
 export const readerOf = (req: FastifyRequest): Viewer => (req.viewer && profileComplete(req.viewer) ? req.viewer : ANON);

@@ -36,6 +36,20 @@
       "when": 1793370950405,
       "tag": "0004_assets_girls_only",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793371925617,
+      "tag": "0005_is_female",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793371932180,
+      "tag": "0006_is_female_backfill",
+      "breakpoints": true
     }
   ]
 }

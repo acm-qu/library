@@ -3,7 +3,7 @@
 // Accounts are all 'core' (admin is a flag on top). 'member' stays for the DB CHECK, old rows and the signed-out viewer.
 export const ROLES = ['member', 'core'] as const;
 export const USER_STATUSES = ['active', 'disabled'] as const;
-export const GENDERS = ['male', 'female'] as const;
+export const GENDERS = ['male', 'female'] as const; // the deprecated users/access_requests.gender CHECK only
 export const ACCESS_REQUEST_STATUSES = ['pending', 'approved', 'rejected'] as const;
 export const TIERS = ['member', 'core'] as const;
 export const ASSET_KINDS = ['image', 'video'] as const;

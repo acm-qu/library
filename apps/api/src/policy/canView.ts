@@ -9,7 +9,7 @@ export type Access = (typeof LEVELS)[number];
 export type AssetForAccess = Pick<Asset, 'tier' | 'girlsOnly' | 'status' | 'uploaderId' | 'deletedAt'>;
 
 /** Girls-only items are for signed-in female core members only: not male admins, not their own male uploader. */
-export const seesGirlsOnly = (v: Viewer) => v.role === 'core' && v.gender === 'female';
+export const seesGirlsOnly = (v: Viewer) => v.role === 'core' && v.isFemale === true;
 
 export function access(v: Viewer | null, a: AssetForAccess, eventDeleted = false): Access {
   if (!v || v.status !== 'active') return 'none';
