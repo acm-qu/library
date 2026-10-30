@@ -663,6 +663,8 @@ The IO total is 70% if the host's MB/s means MiB/s, as LVE's KB/s settings sugge
   ]}
 />
 
+**Watching the pool.** Admin › Processing shows a Disk pool card from the allocator's last pass (`poolSnapshot()` in `apps/api/src/media/throttle.ts`, returned with `/api/admin/compute`): for playback, uploads, the worker and small files, what each is using, its live allocation and its guaranteed share, with a Borrowing tag when it runs above its share, plus how much the other sites use. When the API is quiet the pool is idle and each activity starts at its share.
+
 #### The upload queue: 4 slots for everyone
 
 At most `MAX_UPLOAD_SLOTS = 4` files upload at once across all users, and at most 2 per person (`SLOTS_PER_USER`, because a browser uploads 2 files at a time, so a 3rd slot would sit idle while others wait); they share the uploads' live rate, and every further file waits first come, first served in `upload_tickets`:

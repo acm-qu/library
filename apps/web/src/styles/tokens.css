@@ -169,6 +169,11 @@
 .app .progress > span{display:block;height:100%;background:var(--primary-fg)}
 .app .progress.info > span{background:var(--info)}
 .app .progress.warn > span{background:var(--warn)}
+.app .pool-bar{position:relative;height:10px;background:var(--surface-3)}
+.app .pool-bar > span{position:absolute;inset-block:0;inset-inline-start:0;transition:width .4s var(--ease-out-expo)}
+.app .pool-alloc{background:var(--info-bg,var(--surface-2));border-inline-end:1px solid var(--info)}
+.app .pool-used{background:var(--info)}
+.app .pool-bar > .pool-share{width:2px;background:var(--text);opacity:.6}
 .app .progress.busy > span{width:35%;animation:app-busy 1.4s var(--ease-out-expo) infinite}
 @keyframes app-busy{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
 [dir=rtl] .app .progress.busy > span{animation-direction:reverse}

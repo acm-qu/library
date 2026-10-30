@@ -97,7 +97,10 @@ export const PatchSettingsBody = z.object({ tonemapAuto: z.boolean(), inodeLimit
 
 const Usage = z.object({ threads: z.number().int(), cpuPct: z.number(), ioBps: z.number() });
 /** Live account usage against the host's limits (Admin › Processing). `available` is false off Linux. */
-export const ComputeReport = Usage.extend({ available: z.boolean(), app: Usage, limits: Usage });
+const PoolClass = z.object({ id: z.enum(['playback', 'upload', 'worker', 'small']), shareBps: z.number(), allocBps: z.number(), usedBps: z.number() });
+/** The shared disk pool (apps/api/src/media/throttle.ts): each class's guaranteed share, live allocation and use. */
+const Pool = z.object({ active: z.boolean(), lineBps: z.number(), othersBps: z.number(), classes: z.array(PoolClass) });
+export const ComputeReport = Usage.extend({ available: z.boolean(), app: Usage, limits: Usage, pool: Pool });
 export type ComputeReport = z.infer<typeof ComputeReport>;
 
 export const StorageReport = z.object({

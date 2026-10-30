@@ -115,3 +115,18 @@ describe('disk IO allocator', () => {
     if (process.platform !== 'linux') expect([r.playback, r.upload]).toEqual([LINE_BPS - SHARES.upload, SHARES.upload]); // nothing else measured off Linux
   });
 });
+
+describe('pool snapshot', () => {
+  it("reports each class's share, live allocation and use after an allocator pass", async () => {
+    const { rebalance, poolSnapshot, SHARES, LINE_BPS } = await import('../src/media/throttle.ts');
+    const MiB = 2 ** 20;
+    rebalance(1, null); // flush demand left over by earlier tests in this file
+    rebalance(1, { account: 9 * MiB, self: 0, worker: 6 * MiB }); // the worker busy, other sites using 3
+    const p = poolSnapshot();
+    expect(p).toMatchObject({ active: true, lineBps: LINE_BPS, othersBps: 3 * MiB });
+    const worker = p.classes.find((c) => c.id === 'worker')!;
+    expect(worker).toMatchObject({ shareBps: SHARES.worker, usedBps: 6 * MiB });
+    expect(worker.allocBps).toBe(18 * MiB); // the only active class borrows everything left under the line
+    expect(p.classes.map((c) => c.id)).toEqual(['playback', 'upload', 'worker', 'small']);
+  });
+});

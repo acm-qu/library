@@ -74,8 +74,10 @@ export const ioRates = (): Rates => ({ ...rates });
  */
 export function rebalance(secs: number, io: IoSplit | null) {
   const demand = { worker: io && io.worker > WORKER_ACTIVE_BPS ? Infinity : 0 } as Rates;
+  const used = { worker: io?.worker ?? 0 } as Rates;
   for (const c of API_CLASSES) {
     demand[c] = waiting[c] > 0 ? Infinity : asked[c] / secs;
+    used[c] = asked[c] / secs;
     asked[c] = 0;
   }
   const others = io ? Math.max(0, io.account - io.self - io.worker) : 0;
@@ -83,7 +85,26 @@ export function rebalance(secs: number, io: IoSplit | null) {
   const alloc = allocate(available, demand);
   const scale = Math.min(1, available / LINE_BPS);
   rates = Object.fromEntries(IO_CLASSES.map((c) => [c, Math.max(alloc[c], SHARES[c] * scale)])) as Rates;
+  last = { at: Date.now(), others, available, used, rates: { ...rates } };
   return rates;
+}
+
+let last: { at: number; others: number; available: number; used: Rates; rates: Rates } | null = null;
+
+/** The pool as of the allocator's last pass, for Admin › Processing; `active` is false once it has gone quiet. */
+export function poolSnapshot() {
+  const active = !!last && Date.now() - last.at < 5000;
+  return {
+    active,
+    lineBps: LINE_BPS,
+    othersBps: active ? Math.round(last!.others) : 0,
+    classes: IO_CLASSES.map((c) => ({
+      id: c,
+      shareBps: SHARES[c],
+      allocBps: Math.round(active ? last!.rates[c] : SHARES[c]),
+      usedBps: Math.round(active ? last!.used[c] : 0),
+    })),
+  };
 }
 
 let allocFile: string | null = null;

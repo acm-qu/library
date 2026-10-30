@@ -321,6 +321,47 @@ function Compute({ c }: { c: ComputeReport }) {
       ) : (
         <span className="help">{t('admin.c_unavailable')}</span>
       )}
+      <Pool pool={c.pool} />
     </section>
+  );
+}
+
+/** The shared disk pool: per activity, what it's using now against its live allocation, and its guaranteed share. */
+function Pool({ pool }: { pool: ComputeReport['pool'] }) {
+  const { t } = useTranslation();
+  const io = (b: number) => t('admin.c_perSecond', { size: fmtBytes(b) });
+  const top = Math.max(pool.lineBps, ...pool.classes.map((c) => c.allocBps));
+  return (
+    <div className="panel stack" style={{ gap: 12, padding: 20 }}>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+        <span className="t-over grow">{t('admin.p_title')}</span>
+        <span className="t-sm muted tnum">
+          {pool.active ? t('admin.p_line', { line: io(pool.lineBps), others: io(pool.othersBps) }) : t('admin.p_idle', { line: io(pool.lineBps) })}
+        </span>
+      </div>
+      <div className="stack" style={{ gap: 10 }}>
+        {pool.classes.map((c) => {
+          const borrowing = pool.active && c.allocBps > c.shareBps + 1024;
+          return (
+            <div key={c.id} className="stack" style={{ gap: 4 }}>
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                <span className="t-sm grow" style={{ fontWeight: 600 }}>
+                  {t(`admin.p_${c.id}`)}
+                </span>
+                {borrowing && <span className="st st-ok">{t('admin.p_borrowing')}</span>}
+                <span className="t-sm muted tnum">{t('admin.p_row', { used: io(c.usedBps), alloc: io(c.allocBps), share: io(c.shareBps) })}</span>
+              </div>
+              {/* The bar is the allocation on the pool's scale; the darker part is what's in use, the tick is the share. */}
+              <div className="pool-bar" role="presentation">
+                <span className="pool-alloc" style={{ width: `${(c.allocBps / top) * 100}%` }} />
+                <span className="pool-used" style={{ width: `${(Math.min(c.usedBps, c.allocBps) / top) * 100}%` }} />
+                <span className="pool-share" style={{ insetInlineStart: `${(c.shareBps / top) * 100}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <span className="help">{t('admin.p_help')}</span>
+    </div>
   );
 }
