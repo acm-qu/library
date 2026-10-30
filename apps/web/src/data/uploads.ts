@@ -25,12 +25,13 @@ export function useMyUploads(bucket: api.Bucket, enabled = true, live = false) {
 }
 
 /**
- * Every second while `enabled`: the status and progress of the caller's unfinished uploads (one small query). When
+ * Every 2 s while `enabled` (the worker writes progress about that often): the status and progress of the caller's
+ * unfinished uploads (one small query). When
  * any status differs from the last answer, the full My uploads list is re-fetched.
  */
 export function useUploadProgress(enabled: boolean) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['uploads', 'progress'], queryFn: api.getUploadProgress, enabled, refetchInterval: enabled ? 1_000 : false });
+  const q = useQuery({ queryKey: ['uploads', 'progress'], queryFn: api.getUploadProgress, enabled, refetchInterval: enabled ? 2_000 : false });
   const statuses = (q.data?.items ?? []).map((i) => `${i.assetId}:${i.status}`).join('|');
   useEffect(() => {
     if (q.data) void qc.invalidateQueries({ queryKey: ['uploads', 'mine'] });

@@ -14,5 +14,5 @@ export const createEvent = (body: z.input<typeof CreateEventBody>) => call(Event
 export const discardUpload = (uploadId: string) =>
   fetch(`/api/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE', headers: { 'X-Requested-With': 'acm-media', 'Tus-Resumable': '1.0.0' } });
 
-/** Status and job progress of the caller's unfinished uploads only (one small query; polled every second on My uploads). */
+/** Status and job progress of the caller's unfinished uploads only (one small query; polled every 2 s on My uploads). */
 export const getUploadProgress = () => call(UploadProgress, '/uploads/progress');
