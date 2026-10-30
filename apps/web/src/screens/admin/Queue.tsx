@@ -8,12 +8,14 @@ import { fmtDateTime, fmtDuration, readyAt } from '../../i18n/format.ts';
 import { fmtEta } from '../../lib/eta.ts';
 import { Icon } from '../../ui/Icon.tsx';
 import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
+import { useTabIndicator } from '../../ui/useTabIndicator.ts';
 
 const TABS: api.JobTab[] = ['running', 'queued', 'failed', 'needs_review', 'recent'];
 
 export function QueueScreen() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<api.JobTab>('queued');
+  const tabs = useTabIndicator<HTMLDivElement>('line-bottom', tab);
   const q = useJobs(tab);
   const s = q.data?.summary;
   useEffect(() => {
@@ -76,7 +78,7 @@ export function QueueScreen() {
         </span>
       )}
 
-      <div className="tabs" role="tablist" aria-label={t('admin.queue')}>
+      <div ref={tabs} className="tabs" role="tablist" aria-label={t('admin.queue')}>
         {TABS.map((x) => (
           <button key={x} className="tab" role="tab" aria-selected={tab === x} onClick={() => setTab(x)}>
             {t(`admin.tab_${x}`)}

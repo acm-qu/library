@@ -11,6 +11,7 @@ import { VideoPlayer } from '../ui/Player.tsx';
 import { screenRoutes } from './screens.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import { SearchBox } from '../ui/SearchBox.tsx';
+import { useTabIndicator } from '../ui/useTabIndicator.ts';
 import { useMyUploads } from '../data/uploads.ts';
 import { readyAt } from '../i18n/format.ts';
 
@@ -18,6 +19,9 @@ export const initials = (name: string, email: string) => {
   const parts = (name || email.split('@')[0] || '?').trim().split(/\s+/);
   return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? (parts.at(-1)?.[0] ?? '') : '')).toUpperCase();
 };
+
+/** Admin screens share one key: the admin layout stays put and animates only its own content (see AdminLayout). */
+const pageKey = (path: string) => (path.startsWith('/admin') ? '/admin' : path);
 
 export function AppShell() {
   const { t } = useTranslation();
@@ -29,6 +33,8 @@ export function AppShell() {
   const viewing = matchPath('/p/:assetId', loc.pathname)?.params.assetId;
   const screens = useRoutes(screenRoutes, background && viewing ? background : loc);
   const [expired, setExpired] = useState(false);
+  const navBar = useTabIndicator<HTMLElement>('line-bottom', loc.pathname);
+  const tabBar = useTabIndicator<HTMLElement>('line-top', loc.pathname);
   useEffect(() => onSessionExpired(() => setExpired(true)), []);
 
   if (me.isPending) return <ShellSkeleton />;
@@ -47,7 +53,7 @@ export function AppShell() {
         <Link className="brand" to="/">
           {t('brand')}
         </Link>
-        <nav className="nav hide-sm" aria-label={t('nav.main')}>
+        <nav ref={navBar} className="nav hide-sm" aria-label={t('nav.main')}>
           <Link to="/" aria-current={section === 'library' ? 'page' : undefined}>
             {t('nav.library')}
           </Link>
@@ -89,9 +95,9 @@ export function AppShell() {
       <OfflineBanner />
       {/* One route tree for both cases, so opening the lightbox over a grid doesn't remount (or rescroll) it. */}
       {/* Keyed on the screen underneath (one key for a direct /p/ visit), so only a real page change replays the entrance. */}
-      <div className="page" key={viewing ? (background?.pathname ?? '/p') : loc.pathname}>{screens ?? <Outlet />}</div>
+      <div className="page" key={pageKey(viewing ? (background?.pathname ?? '/p') : loc.pathname)}>{screens ?? <Outlet />}</div>
       {background && viewing && <Lightbox assetId={viewing} background={background} onClose={() => navigate(-1)} player={(a) => <VideoPlayer asset={a} />} />}
-      <nav className="tabbar show-sm" aria-label={t('nav.main')} style={{ gridTemplateColumns: `repeat(${isCore ? 4 : 2}, minmax(0, 1fr))` }}>
+      <nav ref={tabBar} className="tabbar show-sm" aria-label={t('nav.main')} style={{ gridTemplateColumns: `repeat(${isCore ? 4 : 2}, minmax(0, 1fr))` }}>
         <Link to="/" aria-current={section === 'library' ? 'page' : undefined}>
           <Icon name="grid" />
           {t('nav.library')}

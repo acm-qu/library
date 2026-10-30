@@ -10,6 +10,7 @@ import { useMyUploads, useRetry } from '../data/uploads.ts';
 import { fmtBytes, fmtDate, fmtDuration, fmtTime, readyAt } from '../i18n/format.ts';
 import { Icon, type IconName } from '../ui/Icon.tsx';
 import { Skeleton } from '../ui/Skeleton.tsx';
+import { useTabIndicator } from '../ui/useTabIndicator.ts';
 
 const BUCKETS: Bucket[] = ['all', 'active', 'attention', 'ready'];
 
@@ -17,6 +18,7 @@ export function MyUploadsScreen() {
   const { t } = useTranslation();
   const me = useMe().data!;
   const [bucket, setBucket] = useState<Bucket>('all');
+  const tabs = useTabIndicator<HTMLDivElement>('line-bottom', bucket);
   const q = useMyUploads(bucket);
   const items = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
   const counts = q.data?.pages[0]?.counts;
@@ -56,7 +58,7 @@ export function MyUploadsScreen() {
         )}
       </div>
 
-      <div className="tabs" role="tablist" aria-label={t('myUploads.filter')}>
+      <div ref={tabs} className="tabs" role="tablist" aria-label={t('myUploads.filter')}>
         {BUCKETS.map((b) => (
           <button key={b} className="tab" role="tab" aria-selected={bucket === b} onClick={() => setBucket(b)}>
             {t(`myUploads.${b}`)}

@@ -112,11 +112,24 @@ body { margin: 0; min-height: 100vh; }
 .app .page { flex: 1; display: flex; flex-direction: column; animation: app-rise .55s var(--ease-out-expo) backwards; }
 /* A direct /p/ visit renders the lightbox inside the page: a transformed ancestor would pin it to the page, not the viewport. */
 .app .page:has(> .lightbox) { animation: none; }
+/* Content-only entrance inside a layout that stays put (the admin area's side nav). */
+.app .page-in { animation: app-rise .55s var(--ease-out-expo) backwards; }
+
+/* Tab bars: one highlight (::after, placed by useTabIndicator) slides to the current tab; tabs themselves don't fade. */
+.app [data-ind] { isolation: isolate; }
+.app [data-ind]:not(.tabbar) { position: relative; } /* the phone tab bar is already fixed */
+.app [data-ind]::after { content: ''; position: absolute; left: 0; top: 0; z-index: -1; pointer-events: none; width: var(--ind-w); height: var(--ind-h); transform: translate(var(--ind-x), var(--ind-y)); background: var(--primary-fg); }
+.app [data-ind][data-slide]::after { transition: transform .45s var(--ease-out-expo), width .45s var(--ease-out-expo), height .45s var(--ease-out-expo); }
+.app [data-ind='fill']::after { background: var(--surface); border-inline-start: 2px solid var(--primary-fg); }
+.app .nav[data-ind] a[aria-current='page'] { border-bottom-color: transparent; }
+.app .tabbar[data-ind] a[aria-current='page'] { border-top-color: transparent; }
+.app .tabs[data-ind] .tab[aria-selected='true'] { border-bottom-color: transparent; }
+.app .sidenav[data-ind] a[aria-current='page'] { background: transparent; border-inline-start-color: transparent; }
 .app .reveal { animation: app-rise .7s var(--ease-out-expo) backwards; animation-delay: calc(min(var(--i, 0), 12) * 45ms); }
 .app img.fade { opacity: 0; transition: opacity .5s var(--ease-out-expo), transform .8s var(--ease-out-expo); }
 .app img.fade[data-loaded] { opacity: 1; }
 .app .tile:hover img, .app .tile:focus-visible img, .app a:hover > .cover img, .app a:focus-visible > .cover img { transform: scale(1.035); }
-.app .btn, .app .chip, .app .tab, .app .nav a, .app .sidenav a, .app .tabbar a, .app .menu button, .app .pick { transition: background-color .25s var(--ease-out-expo), border-color .25s var(--ease-out-expo), color .25s var(--ease-out-expo); }
+.app .btn, .app .chip, .app .menu button, .app .pick { transition: background-color .25s var(--ease-out-expo), border-color .25s var(--ease-out-expo), color .25s var(--ease-out-expo); }
 .app a { transition: color .25s var(--ease-out-expo); }
 .app .lightbox { animation: app-fade .3s var(--ease-out-expo) backwards; }
 .app .lightbox .lb-body { animation: app-zoom .5s var(--ease-out-expo) backwards; }
