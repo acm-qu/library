@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router';
 import { fmtDuration, readyAt } from '../i18n/format.ts';
 import { Icon } from './Icon.tsx';
+import { fadeIn } from './Skeleton.tsx';
 
 export function MediaTile({ a, index, eventTitle }: { a: AssetTile; index: number; eventTitle: string }) {
   const { t } = useTranslation();
@@ -28,11 +29,12 @@ export function MediaTile({ a, index, eventTitle }: { a: AssetTile; index: numbe
   ]
     .filter(Boolean)
     .join(', ');
-  const bg = unfinished || !a.thumbUrl || broken ? 'var(--surface-2)' : 'var(--surface-3)';
+  // A thumbnail fades in over the shimmer; tiles without one keep the flat status background.
+  const thumb = !unfinished && !!a.thumbUrl && !broken;
 
   return (
-    <Link className="tile" to={`/p/${a.id}`} state={{ background: loc }} aria-label={label} style={{ width: '100%', height: '100%', background: bg }}>
-      {a.thumbUrl && !broken && <img src={a.thumbUrl} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
+    <Link className={thumb ? 'tile skel' : 'tile'} to={`/p/${a.id}`} state={{ background: loc }} aria-label={label} style={{ width: '100%', height: '100%', background: thumb ? undefined : 'var(--surface-2)' }}>
+      {a.thumbUrl && !broken && <img {...fadeIn} src={a.thumbUrl} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
       {a.tier === 'core' && (
         <span className="mb" title={t('tile.core')} style={{ position: 'absolute', top: 6, insetInlineStart: 6 }}>
           <Icon name="shield" />

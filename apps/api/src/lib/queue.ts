@@ -1,7 +1,7 @@
 // Queue position → ETA, using the shared formula. Jobs are taken in the worker's claim order.
 import { appSettings, assets, type Db, jobs } from '@acm/core/db';
 import { DEFAULT_RHO, HDR_FIXED_SECONDS, queueEtas, type Rho, SCORE_SECONDS } from '@acm/core/eta';
-import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 
 export async function loadRho(db: Db): Promise<Rho> {
   const rows = await db.select().from(appSettings).where(inArray(appSettings.key, ['rho_sdr', 'rho_hdr', 'score_seconds', 'tonemap_auto']));
@@ -15,7 +15,7 @@ export async function loadRho(db: Db): Promise<Rho> {
 
 export type ActiveJob = { jobId: string; assetId: string | null; kind: string; state: string; step: string | null; progress: number | null; readyInS: number };
 
-/** Every queued or running job with its ETA, in claim order (running first). */
+/** Every queued or running job (except purges) with its ETA, in claim order (running first). */
 export async function activeJobs(db: Db): Promise<ActiveJob[]> {
   const rows = await db
     .select({
@@ -31,7 +31,8 @@ export async function activeJobs(db: Db): Promise<ActiveJob[]> {
     })
     .from(jobs)
     .leftJoin(assets, eq(assets.id, jobs.assetId))
-    .where(inArray(jobs.state, ['queued', 'running']))
+    // Purges take a moment and nobody waits on them, so they don't count toward anyone's ETA.
+    .where(and(inArray(jobs.state, ['queued', 'running']), ne(jobs.kind, 'purge')))
     .orderBy(sql`${jobs.state} = 'running' desc`, desc(jobs.priority), asc(jobs.createdAt));
   const rho = await loadRho(db);
   const etas = queueEtas(

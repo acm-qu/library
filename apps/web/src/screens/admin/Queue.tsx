@@ -7,6 +7,7 @@ import { useAdminMutation, useJobs } from '../../data/admin.ts';
 import { fmtDateTime, fmtDuration, readyAt } from '../../i18n/format.ts';
 import { fmtEta } from '../../lib/eta.ts';
 import { Icon } from '../../ui/Icon.tsx';
+import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
 
 const TABS: api.JobTab[] = ['running', 'queued', 'failed', 'needs_review', 'recent'];
 
@@ -50,6 +51,18 @@ export function QueueScreen() {
         )}
       </div>
 
+      {!s && q.isPending && (
+        <div className="row" style={{ gap: 12, flexWrap: 'wrap' }} aria-hidden="true">
+          {[0, 1, 2].map((n) => (
+            <div key={n} className="panel stack" style={{ flex: '1 1 220px', gap: 4, padding: 20 }}>
+              <Skeleton h={16} w="45%" />
+              <Skeleton h={40} w="35%" />
+              <Skeleton h={20} w="70%" />
+            </div>
+          ))}
+        </div>
+      )}
+      {!s && q.isPending && <Skeleton h={20} w={260} />}
       {s && (
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
           <Stat label={t('admin.q_waiting')} value={String(s.running + s.queued)} note={t('admin.q_waitingNote', { running: s.running, queued: s.queued })} />
@@ -72,9 +85,17 @@ export function QueueScreen() {
         ))}
       </div>
 
-      <div role="tabpanel">
-        {!items.length ? (
-          <p className="t-body muted">{q.isPending ? t('states.loading') : t('admin.q_none')}</p>
+      <div role="tabpanel" aria-busy={q.isPending || undefined} aria-label={q.isPending ? t('states.loading') : undefined}>
+        {q.isPending ? (
+          <div className="card">
+            <table className="tbl">
+              <tbody>
+                <SkeletonRows rows={5} cols={5} />
+              </tbody>
+            </table>
+          </div>
+        ) : !items.length ? (
+          <p className="t-body muted">{t('admin.q_none')}</p>
         ) : tab === 'running' ? (
           <div className="stack" style={{ gap: 12 }}>
             {items.map((i) => (

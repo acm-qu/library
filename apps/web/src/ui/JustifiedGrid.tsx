@@ -3,6 +3,7 @@
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { aspect, justify } from './justify.ts';
+import { revealIndex } from './Skeleton.tsx';
 
 type Item = { id: string; width: number | null; height: number | null };
 
@@ -22,6 +23,9 @@ export function JustifiedGrid<T extends Item>({
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [offset, setOffset] = useState(0);
+  // Rows on screen when the grid first appears rise in; rows virtualized in later while scrolling just appear.
+  const mountedAt = useRef(performance.now());
+  const intro = performance.now() - mountedAt.current < 1500;
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -59,8 +63,8 @@ export function JustifiedGrid<T extends Item>({
         const row = rows[vr.index]!;
         return (
           <div key={vr.key} role="presentation" style={{ position: 'absolute', top: 0, insetInlineStart: 0, width: '100%', display: 'flex', gap, transform: `translateY(${vr.start - v.options.scrollMargin}px)` }}>
-            {row.items.map((it) => (
-              <div key={it.id} role="listitem" style={{ width: it.w, height: row.height, flex: 'none' }}>
+            {row.items.map((it, j) => (
+              <div key={it.id} role="listitem" className={intro ? 'reveal' : undefined} style={{ width: it.w, height: row.height, flex: 'none', ...revealIndex(vr.index + j) }}>
                 {renderTile(it, { w: it.w, h: row.height })}
               </div>
             ))}
@@ -71,14 +75,14 @@ export function JustifiedGrid<T extends Item>({
   );
 }
 
-/** Skeleton row from the board, shown while the next page loads. */
+/** Skeleton rows from the board, at the grid's row height: shown while the first or the next page loads. */
 export function GridSkeleton({ count = 5 }: { count?: number }) {
   const ars = [1.5, 0.75, 1.5, 1.33, 1.5, 1, 1.78, 0.75];
   return (
     <div className="jgrid" aria-hidden="true" style={{ opacity: 0.7 }}>
       {Array.from({ length: count }, (_, i) => {
         const ar = ars[i % ars.length]!;
-        return <div key={i} className="skel" style={{ flex: `${ar} 1 ${Math.round(ar * 160)}px`, aspectRatio: String(ar) }} />;
+        return <div key={i} className="skel" style={{ flex: `${ar} 1 calc(${ar} * var(--tile-h))` }} />;
       })}
     </div>
   );

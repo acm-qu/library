@@ -9,6 +9,7 @@ import { fmtDate } from '../i18n/format.ts';
 import { Icon } from '../ui/Icon.tsx';
 import { GridSkeleton, JustifiedGrid } from '../ui/JustifiedGrid.tsx';
 import { MediaTile } from '../ui/MediaTile.tsx';
+import { fadeIn, Skeleton } from '../ui/Skeleton.tsx';
 import { NotFound, ServerError } from './States.tsx';
 
 type Kind = 'image' | 'video' | undefined;
@@ -18,8 +19,7 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
   const { t } = useTranslation();
   const params0 = useParams();
   const slug = slugProp ?? params0.slug ?? '';
-  const me = useMe().data!;
-  const isCore = me.role === 'core';
+  const isCore = useMe().data?.role === 'core';
   const [params, setParams] = useSearchParams();
   const kind = (['image', 'video'].includes(params.get('kind') ?? '') ? params.get('kind') : undefined) as Kind;
   const tier = (isCore && ['member', 'core'].includes(params.get('tier') ?? '') ? params.get('tier') : undefined) as Tier;
@@ -38,13 +38,25 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
   if (ev.isPending)
     return (
       <>
-        <div className="skel" style={{ height: 'var(--cover-h)' }} />
-        <main id="main" className="wrap stack" aria-busy="true" style={{ paddingTop: 28, gap: 16 }}>
-          <div className="skel" style={{ height: 40, width: 360, maxWidth: '100%' }} />
-          <div className="skel" style={{ height: 18, width: 240 }} />
-          <div style={{ marginTop: 16 }}>
-            <GridSkeleton count={12} />
+        <div className="skel" style={{ position: 'relative', height: 'var(--cover-h)' }}>
+          <Link to="/" className="btn btn-sm btn-on-media" style={{ position: 'absolute', top: 20, insetInlineStart: 'var(--gutter)' }}>
+            <Icon name="back" className="flip" />
+            {t('event.backToLibrary')}
+          </Link>
+        </div>
+        {/* Same boxes as the loaded header: meta line, display title, count line, filter chips, then grid rows. */}
+        <main id="main" className="wrap stack" aria-busy="true" aria-label={t('states.loading')} style={{ flex: 1, paddingTop: 28, paddingBottom: 96, gap: 24 }}>
+          <div className="stack" style={{ gap: 8 }}>
+            <Skeleton h={20} w={220} />
+            <Skeleton h={56} w={480} />
+            <Skeleton h={20} w={160} />
           </div>
+          <div className="row" style={{ gap: 8, paddingBottom: 4 }}>
+            <Skeleton h="var(--h-ctl-sm)" w={56} />
+            <Skeleton h="var(--h-ctl-sm)" w={76} />
+            <Skeleton h="var(--h-ctl-sm)" w={72} />
+          </div>
+          <GridSkeleton count={12} />
         </main>
       </>
     );
@@ -64,8 +76,8 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
 
   return (
     <>
-      <div role="img" aria-label={t('event.coverLabel', { title: e.title })} style={{ position: 'relative', height: 'var(--cover-h)', background: 'linear-gradient(160deg, #5F6B74, #2F353A)', overflow: 'hidden' }}>
-        {e.coverUrl && <img src={e.coverUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} onError={(x) => (x.currentTarget.style.display = 'none')} />}
+      <div role="img" aria-label={t('event.coverLabel', { title: e.title })} className={e.coverUrl ? 'skel' : undefined} style={{ position: 'relative', height: 'var(--cover-h)', background: e.coverUrl ? undefined : 'linear-gradient(160deg, #5F6B74, #2F353A)', overflow: 'hidden' }}>
+        {e.coverUrl && <img {...fadeIn} src={e.coverUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} onError={(x) => ((x.currentTarget.style.display = 'none'), (x.currentTarget.dataset.loaded = ''))} />}
         <Link to="/" className="btn btn-sm btn-on-media" style={{ position: 'absolute', top: 20, insetInlineStart: 'var(--gutter)' }}>
           <Icon name="back" className="flip" />
           {t('event.backToLibrary')}
@@ -118,7 +130,9 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
               )}
             </div>
             {assets.isPending ? (
-              <GridSkeleton count={12} />
+              <div aria-busy="true" aria-label={t('states.loading')}>
+                <GridSkeleton count={12} />
+              </div>
             ) : assets.isError ? (
               <ServerError onRetry={() => void assets.refetch()} />
             ) : items.length === 0 ? (

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router';
 import { Icon } from '../ui/Icon.tsx';
 import { Rich } from '../ui/Rich.tsx';
+import { Skeleton } from '../ui/Skeleton.tsx';
 
 export function NotFound() {
   const { t } = useTranslation();
@@ -86,5 +87,33 @@ export function OfflineBanner() {
       <Icon name="offline" />
       <span className="grow">{t('states.offline')}</span>
     </div>
+  );
+}
+
+/** While the session loads: the top bar's frame (brand, then the account slot) and a page heading with cover rows. */
+export function ShellSkeleton() {
+  const { t } = useTranslation();
+  return (
+    <>
+      <div className="topbar" aria-hidden="true">
+        <span className="brand">{t('brand')}</span>
+        <span className="grow" />
+        <span className="hide-sm">
+          <Skeleton h={40} w={300} />
+        </span>
+        <Skeleton h={36} w={36} round />
+      </div>
+      <main className="wrap" aria-busy="true" aria-label={t('states.loading')} style={{ flex: 1, paddingTop: 32, paddingBottom: 64, display: 'flex', flexDirection: 'column', gap: 28 }}>
+        <Skeleton h={44} w={104} />
+        <div className="covers" aria-hidden="true">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="stack" style={{ gap: 10 }}>
+              <div className="cover skel" />
+              <Skeleton h={24} w={`${70 - i * 6}%`} />
+            </div>
+          ))}
+        </div>
+      </main>
+    </>
   );
 }

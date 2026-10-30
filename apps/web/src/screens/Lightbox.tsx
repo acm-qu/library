@@ -9,6 +9,7 @@ import { useAsset, useEvent } from '../data/library.ts';
 import { useMe } from '../data/session.ts';
 import { fmtBytes, fmtDate, fmtDateTime } from '../i18n/format.ts';
 import { Icon } from '../ui/Icon.tsx';
+import { Skeleton } from '../ui/Skeleton.tsx';
 
 /** The loaded grid order for this event, from whichever event-assets query holds the asset. */
 function useNeighbours(assetId: string) {
@@ -23,10 +24,18 @@ function useNeighbours(assetId: string) {
   }, [qc, assetId]);
 }
 
-export function Lightbox({ assetId, background, onClose, player }: { assetId: string; background?: Location; onClose: () => void; player?: (a: AssetDetail) => ReactNode }) {
+export function Lightbox({ assetId, background, onClose: close, player }: { assetId: string; background?: Location; onClose: () => void; player?: (a: AssetDetail) => ReactNode }) {
   const { t } = useTranslation();
+  // Closing plays the short fade-out first (skipped when motion is reduced); a second Esc during it does nothing.
+  const [closing, setClosing] = useState(false);
+  const onClose = () => (matchMedia('(prefers-reduced-motion: reduce)').matches ? close() : setClosing(true));
+  useEffect(() => {
+    if (!closing) return;
+    const timer = setTimeout(close, 180);
+    return () => clearTimeout(timer);
+  }, [closing]); // not on close: the parent passes a new one every render, which would restart the timer
   const navigate = useNavigate();
-  const me = useMe().data!;
+  const me = useMe().data;
   const asset = useAsset(assetId);
   const a = asset.data;
   const event = useEvent(a?.eventId ?? '');
@@ -92,7 +101,8 @@ export function Lightbox({ assetId, background, onClose, player }: { assetId: st
       aria-modal="true"
       aria-label={a?.kind === 'video' ? t('viewer.videoDialog') : t('viewer.dialog')}
       tabIndex={-1}
-      onKeyDown={onKey}
+      onKeyDown={closing ? undefined : onKey}
+      data-closing={closing || undefined}
     >
       <div className="lb-bar">
         <button className="btn btn-g btn-ic" aria-label={t('viewer.close')} onClick={onClose}>
@@ -130,9 +140,9 @@ export function Lightbox({ assetId, background, onClose, player }: { assetId: st
             <Icon name="back" className="flip" />
           </button>
           {!a ? (
-            <span className="lb-dim row" style={{ gap: 10 }} aria-live="polite">
-              <Icon name="spinner" className="spin" />
-            </span>
+            <div aria-busy="true" aria-label={t('states.loading')} style={{ width: 'min(100%, 1080px, calc((100vh - 120px) * 1.5))' }}>
+              <Skeleton h="auto" style={{ aspectRatio: '3 / 2' }} />
+            </div>
           ) : a.kind === 'video' ? (
             player ? player(a) : null
           ) : !a.viewUrl ? (
@@ -190,6 +200,20 @@ export function Lightbox({ assetId, background, onClose, player }: { assetId: st
           )}
         </div>
 
+        {info && !a && (
+          <aside className="lb-info" aria-hidden="true">
+            <div className="stack" style={{ gap: 8 }}>
+              <Skeleton h={24} w="70%" />
+              <Skeleton h={20} w="40%" />
+            </div>
+            <div className="stack" style={{ gap: 12 }}>
+              {[0, 1, 2, 3].map((n) => (
+                <Skeleton key={n} h={20} w={`${80 - n * 10}%`} />
+              ))}
+            </div>
+            <Skeleton h="var(--h-ctl)" />
+          </aside>
+        )}
         {info && a && (
           <aside className="lb-info" aria-label={a.kind === 'video' ? t('viewer.videoInfo') : t('viewer.info')}>
             <div className="row" style={{ alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -258,7 +282,7 @@ export function Lightbox({ assetId, background, onClose, player }: { assetId: st
                 )}
               </div>
             )}
-            {me.isAdmin && (
+            {me?.isAdmin && (
               <>
                 <hr className="divider" />
                 <Link to={`/admin/items/${a.id}`} className="btn btn-g btn-sm" style={{ alignSelf: 'flex-start', padding: 0 }}>

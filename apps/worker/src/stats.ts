@@ -1,5 +1,5 @@
-// Nightly storage stats (cron): bytes and file count under MEDIA_ROOT, kept in app_settings for Admin · Storage.
-// Counting files on every page view would walk the whole tree; once a night is enough.
+// Storage stats (nightly cron, and after any worker pass that ran jobs): bytes and file count under MEDIA_ROOT, kept in app_settings for Admin · Storage.
+// Counting files on every page view would walk the whole tree; only passes that changed files re-walk it.
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { appSettings } from '@acm/core/db';

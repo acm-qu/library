@@ -1,6 +1,7 @@
 # QU ACM Media Library
 
-Private photo and video library for the QU ACM student chapter. Source requirements: `docs/HANDOFF.md` (backend)
+Photo and video library for the QU ACM student chapter: member-tier items are public (no sign-in), core-tier
+items and uploads need a core-team session. Source requirements: `docs/HANDOFF.md` (backend)
 and `docs/DESIGN-HANDOFF.md` (the Darkroom Archive design). The build plan with all system diagrams is
 `plans/acm-media-library/plan.mdx` (open it with `plans/run-plan.sh`).
 
@@ -34,7 +35,8 @@ Copy `.env.example` to `.env.local` for development (`MAIL_TRANSPORT=log` prints
   `jsonb_path_*`, `INCLUDE` indexes or extensions. Statuses are text + CHECK; ids are UUID v7 from `@acm/core/ids`.
   Test SQL against the docker 9.6 image. Never `drizzle-kit push`.
 - **Migrations are additive only**, so the previous release still runs if a deploy is rolled back.
-- **404, never 403**, for anything a viewer may not see. All media access goes through `access()` in
+- **404, never 403**, for anything a viewer may not see. Signed-out visitors read as `ANON` (member tier) via
+  `readerOf()` in `apps/api/src/auth/plugin.ts`. All media access goes through `access()` in
   `apps/api/src/policy/canView.ts`.
 - **Pages never call fetch.** `apps/web/src/api/` → `data/` hooks → `screens/` and `ui/`.
 - **All UI strings go through i18next** (English only for now; layouts must stay RTL-safe).
@@ -46,3 +48,4 @@ Copy `.env.example` to `.env.local` for development (`MAIL_TRANSPORT=log` prints
 cPanel / CloudLinux at `qu.hosting.acm.org`, user `quhosting`. Node from `/opt/alt/alt-nodejs24`, Python
 `/opt/alt/python313/bin/python3.13`, ffmpeg in `~/bin`. App at `~/apps/acm-media/{releases,shared,current}`;
 secrets in `shared/.env` (600). Back up with `pg_dump -n public` (a PostGIS `topology` schema blocks a full dump).
+

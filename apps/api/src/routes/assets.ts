@@ -4,7 +4,7 @@ import { type AssetDetail, AssetListQuery, Id, PatchAssetBody, type Viewer } fro
 import { and, asc, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { requireAdmin, requireUser, viewerOf } from '../auth/plugin.ts';
+import { readerOf, requireAdmin, requireUser, viewerOf } from '../auth/plugin.ts';
 import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { downloadName, mediaUrl, toTile } from '../lib/dto.ts';
@@ -30,8 +30,8 @@ export async function loadAsset(db: Db, v: Viewer, id: string, min: 'status' | '
 }
 
 export function assetRoutes(app: FastifyInstance, { db }: { db: Db }) {
-  app.get('/api/events/:id/assets', { preHandler: requireUser }, async (req) => {
-    const v = viewerOf(req);
+  app.get('/api/events/:id/assets', async (req) => {
+    const v = readerOf(req);
     const { id: idOrSlug } = z.object({ id: z.string().max(200) }).parse(req.params);
     const qry = AssetListQuery.parse(req.query);
     const ev = await findVisibleEvent(db, v, idOrSlug);
@@ -55,8 +55,8 @@ export function assetRoutes(app: FastifyInstance, { db }: { db: Db }) {
     };
   });
 
-  app.get('/api/assets/:id', { preHandler: requireUser }, async (req): Promise<AssetDetail> => {
-    const v = viewerOf(req);
+  app.get('/api/assets/:id', async (req): Promise<AssetDetail> => {
+    const v = readerOf(req);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const a = await loadAsset(db, v, id, 'status');
     const level = access(v, a);
@@ -78,7 +78,7 @@ export function assetRoutes(app: FastifyInstance, { db }: { db: Db }) {
       capturedAt: a.capturedAt?.toISOString() ?? null,
       device: a.device,
       fps: a.fps,
-      uploader: uploader ? { id: uploader.id, name: uploader.name || uploader.email.split('@')[0]! } : null,
+      uploader: uploader && req.viewer ? { id: uploader.id, name: uploader.name || uploader.email.split('@')[0]! } : null,
       viewUrl: full && a.kind === 'image' && has('image_view') ? mediaUrl(a.id, 'view', a.renditionRev) : null,
       posterUrl: full && a.kind === 'video' && has('video_poster') ? mediaUrl(a.id, 'poster', a.renditionRev) : null,
       hlsUrl: full && a.kind === 'video' && has('hls_master') ? `/api/media/${a.id}/hls/master.m3u8?v=${a.renditionRev}` : null,

@@ -7,6 +7,7 @@ import * as api from '../../api/admin.ts';
 import { useAdminMutation, useSettings, useStorage } from '../../data/admin.ts';
 import { fmtBytes, fmtDateTime } from '../../i18n/format.ts';
 import i18n from '../../i18n/index.ts';
+import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
 
 const fmtInt = (n: number) => new Intl.NumberFormat(i18n.language).format(n);
 
@@ -20,7 +21,44 @@ export function StorageScreen() {
     document.title = `${t('admin.storage')} · ${t('brand')}`;
   }, [t]);
   useEffect(() => setLimit(settings?.inodeLimit ? String(settings.inodeLimit) : ''), [settings?.inodeLimit]);
-  if (!s) return <div className="skel" style={{ height: 300 }} aria-busy="true" />;
+  if (!s)
+    return (
+      <>
+        <div className="stack" style={{ gap: 4 }}>
+          <h1 className="t-h1">{t('admin.storage')}</h1>
+          <Skeleton h={20} w={260} />
+        </div>
+        {/* Space and files tiles, growth chart, largest events: the loaded page's sections at their usual sizes. */}
+        <div className="stack" style={{ gap: 24 }} aria-busy="true" aria-label={t('states.loading')}>
+          <div className="row" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'stretch' }} aria-hidden="true">
+            {[0, 1].map((n) => (
+              <div key={n} className="panel stack" style={{ flex: '1 1 320px', gap: 12 }}>
+                <Skeleton h={24} w="30%" />
+                <Skeleton h={44} w="45%" />
+                <Skeleton h={12} />
+                <Skeleton h={20} w="60%" />
+                <Skeleton h={20} w="40%" />
+              </div>
+            ))}
+          </div>
+          <div className="panel stack" style={{ gap: 12 }} aria-hidden="true">
+            <Skeleton h={24} w="25%" />
+            <div className="row" style={{ gap: 8, alignItems: 'flex-end', height: 160 }}>
+              {[40, 48, 52, 58, 61, 66, 70, 74, 80, 86, 92, 100].map((pct, n) => (
+                <span key={n} className="grow skel" style={{ height: `${pct}%`, maxWidth: 48 }} />
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <table className="tbl">
+              <tbody>
+                <SkeletonRows rows={4} cols={4} />
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </>
+    );
   const total = s.bytesOriginals + s.bytesRenditions;
   const pctOrig = total ? (s.bytesOriginals / total) * 100 : 0;
   const filePct = s.inodeLimit ? Math.round((s.files / s.inodeLimit) * 100) : null;

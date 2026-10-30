@@ -5,6 +5,8 @@ import type { FastifyInstance } from 'fastify';
 import { issueCode, type OtpDeps, verifyCode } from '../auth/otp.ts';
 import { cookieOptions, requireUser, viewerOf } from '../auth/plugin.ts';
 import { createSession, deleteSession, deleteUserSessions, SESSION_COOKIE } from '../auth/sessions.ts';
+import { audit } from '../lib/audit.ts';
+import { HttpError } from '../lib/errors.ts';
 import { makeLimiter } from '../lib/limits.ts';
 import { withFloor } from '../lib/time.ts';
 import type { Mailer } from '../mail/mailer.ts';
@@ -17,6 +19,7 @@ export function authRoutes(app: FastifyInstance, deps: { db: Db; cfg: ServerConf
   const otp: OtpDeps = { db, pepper: Buffer.from(cfg.OTP_PEPPER, 'base64'), allowlist: cfg.PRELAUNCH_ALLOWLIST };
   const emailOf = (req: { body: unknown }) => RequestCodeBody.safeParse(req.body).data?.email ?? '-';
   const perEmail = makeLimiter(app, 'requestCodeEmail', emailOf);
+  const perEmailDay = makeLimiter(app, 'requestCodeEmailDay', emailOf);
   const perIp = makeLimiter(app, 'requestCodeIp', (req) => req.ip);
   const verifyPerIp = makeLimiter(app, 'verifyIp', (req) => req.ip);
 
@@ -24,6 +27,7 @@ export function authRoutes(app: FastifyInstance, deps: { db: Db; cfg: ServerConf
     const { email } = RequestCodeBody.parse(req.body);
     await perIp(req);
     await perEmail(req);
+    await perEmailDay(req);
     const issued = await withFloor(deps.floorMs ?? REQUEST_CODE_FLOOR_MS, () => issueCode(otp, email, req.ip));
     if (issued) {
       // After the response, so SMTP latency can't be timed either.
@@ -35,7 +39,13 @@ export function authRoutes(app: FastifyInstance, deps: { db: Db; cfg: ServerConf
   app.post('/api/auth/verify', async (req, reply) => {
     await verifyPerIp(req);
     const { email, code } = VerifyBody.parse(req.body);
-    const user = await verifyCode(otp, email, code);
+    const user = await verifyCode(otp, email, code).catch((err: unknown) => {
+      if (err instanceof HttpError) req.log.warn({ evt: 'otp_fail', reason: err.code, ip: req.ip }, 'sign-in code rejected');
+      throw err;
+    });
+    // A browser that already held a session (another user on a shared PC) doesn't keep it.
+    if (req.sessionId) await deleteSession(db, req.sessionId);
+    await audit(db, user.id, 'auth.login', { type: 'user', id: user.id }, { ip: req.ip });
     const s = await createSession(db, user.id, { ip: req.ip, userAgent: req.headers['user-agent'] ?? null });
     reply.setCookie(SESSION_COOKIE, s.token, cookieOptions(cfg, s.expiresAt));
     return Me.parse(user);

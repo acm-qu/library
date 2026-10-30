@@ -11,6 +11,7 @@ import { initials } from '../../routes/AppShell.tsx';
 import { Confirm } from '../../ui/Confirm.tsx';
 import { Icon } from '../../ui/Icon.tsx';
 import { Rich } from '../../ui/Rich.tsx';
+import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 type Pending = { kind: 'member' | 'disable'; user: AdminUser } | null;
@@ -52,7 +53,7 @@ export function MembersScreen() {
       <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
         <div className="stack grow" style={{ gap: 4 }}>
           <h1 className="t-h1">{t('admin.members')}</h1>
-          {counts && <span className="t-sm muted tnum">{t('admin.m_summary', counts)}</span>}
+          {counts ? <span className="t-sm muted tnum">{t('admin.m_summary', counts)}</span> : users.isPending && <Skeleton h={20} w={240} />}
         </div>
         <button className="btn btn-s" onClick={() => setPanel(panel === 'bulk' ? 'none' : 'bulk')}>
           {t('admin.m_paste')}
@@ -99,7 +100,7 @@ export function MembersScreen() {
         </div>
       )}
 
-      <div className="card scroll-x">
+      <div className="card scroll-x" aria-busy={users.isPending || undefined} aria-label={users.isPending ? t('states.loading') : undefined}>
         <table className="tbl">
           <thead>
             <tr>
@@ -114,6 +115,7 @@ export function MembersScreen() {
             </tr>
           </thead>
           <tbody>
+            {users.isPending && <SkeletonRows rows={6} cols={6} />}
             {all.map((u) => (
               <tr key={u.id}>
                 <td>

@@ -10,7 +10,7 @@ import { assetDir, originalPath } from '@acm/core/paths';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { requireUser, viewerOf } from '../auth/plugin.ts';
+import { readerOf } from '../auth/plugin.ts';
 import { notFound } from '../lib/errors.ts';
 import { attachment, parseRange } from '../media/range.ts';
 import { loadAsset } from './assets.ts';
@@ -68,9 +68,9 @@ export function mediaRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
     return { fileKey: unwrapKey(row.fileKeyWrapped, master), hlsKey: row.hlsKeyWrapped ? unwrapKey(row.hlsKeyWrapped, master) : null };
   }
 
-  app.get('/api/media/:id/original', { preHandler: requireUser }, async (req, reply) => {
+  app.get('/api/media/:id/original', async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const a: Asset = await loadAsset(db, viewerOf(req), id, 'download');
+    const a: Asset = await loadAsset(db, readerOf(req), id, 'download');
     const headers = { 'Content-Disposition': attachment(a.originalFilename), 'Cache-Control': 'private, no-cache' };
     const type = a.originalMime ?? 'application/octet-stream';
     if (a.encrypted) {
@@ -85,18 +85,18 @@ export function mediaRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
   const withRev = (text: string, rev: number) => text.replace(/^(?!#)(\S+)$/gm, (uri) => `${uri}${uri.includes('?') ? '&' : '?'}v=${rev}`);
 
   /** The AES-128 key for a core video's segments. Same 404 rule as the media; never cached. */
-  app.get('/api/media/:id/hls/key', { preHandler: requireUser }, async (req, reply) => {
+  app.get('/api/media/:id/hls/key', async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const a = await loadAsset(db, viewerOf(req), id, 'full');
+    const a = await loadAsset(db, readerOf(req), id, 'full');
     if (a.tier !== 'core' || a.kind !== 'video') throw notFound();
     const { hlsKey } = await keysOf(a.id);
     if (!hlsKey) throw notFound();
     return reply.headers({ 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }).send(hlsKey);
   });
 
-  app.get('/api/media/:id/hls/master.m3u8', { preHandler: requireUser }, async (req, reply) => {
+  app.get('/api/media/:id/hls/master.m3u8', async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const a = await loadAsset(db, viewerOf(req), id, 'full');
+    const a = await loadAsset(db, readerOf(req), id, 'full');
     const [m] = await db.select().from(renditions).where(and(eq(renditions.assetId, a.id), eq(renditions.kind, 'hls_master')));
     if (!m) throw notFound();
     const text = await readFile(path.join(assetDir(cfg.MEDIA_ROOT, a.id), m.relPath), 'utf8').catch(() => {
@@ -109,14 +109,14 @@ export function mediaRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
     const p = z.object({ id: z.string(), variant: z.string().regex(/^\d{3,4}p$/) }).safeParse(req.params);
     if (!p.success) throw notFound();
     const { id, variant: label } = p.data;
-    const a = await loadAsset(db, viewerOf(req), id, 'full');
+    const a = await loadAsset(db, readerOf(req), id, 'full');
     // Only stored labels are accepted; nothing from the URL is joined into a path.
     const [r] = await db.select().from(renditions).where(and(eq(renditions.assetId, a.id), eq(renditions.kind, 'hls_variant'), eq(renditions.label, label)));
     if (!r) throw notFound();
     return { a, dir: path.dirname(path.join(assetDir(cfg.MEDIA_ROOT, a.id), r.relPath)) };
   }
 
-  app.get('/api/media/:id/hls/:variant/index.m3u8', { preHandler: requireUser }, async (req, reply) => {
+  app.get('/api/media/:id/hls/:variant/index.m3u8', async (req, reply) => {
     const { a, dir } = await variant(req);
     const text = await readFile(path.join(dir, 'index.m3u8'), 'utf8').catch(() => {
       throw notFound();
@@ -124,16 +124,16 @@ export function mediaRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
     return reply.headers({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'private, no-cache' }).send(withRev(text, a.renditionRev));
   });
 
-  app.get('/api/media/:id/hls/:variant/data.ts', { preHandler: requireUser }, async (req, reply) => {
+  app.get('/api/media/:id/hls/:variant/data.ts', async (req, reply) => {
     const { dir } = await variant(req);
     return sendFile(req, reply, path.join(dir, 'data.ts'), 'video/mp2t', { 'Cache-Control': IMMUTABLE });
   });
 
-  app.get('/api/media/:id/:what', { preHandler: requireUser }, async (req, reply) => {
+  app.get('/api/media/:id/:what', async (req, reply) => {
     const { id, what } = params.parse(req.params);
     const spec = KINDS[what];
     if (!spec) throw notFound();
-    const a = await loadAsset(db, viewerOf(req), id, spec.min);
+    const a = await loadAsset(db, readerOf(req), id, spec.min);
     const [r] = await db
       .select()
       .from(renditions)

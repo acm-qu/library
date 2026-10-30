@@ -9,6 +9,7 @@ import { useMe } from '../data/session.ts';
 import { useMyUploads, useRetry } from '../data/uploads.ts';
 import { fmtBytes, fmtDate, fmtDuration, fmtTime, readyAt } from '../i18n/format.ts';
 import { Icon, type IconName } from '../ui/Icon.tsx';
+import { Skeleton } from '../ui/Skeleton.tsx';
 
 const BUCKETS: Bucket[] = ['all', 'active', 'attention', 'ready'];
 
@@ -40,6 +41,7 @@ export function MyUploadsScreen() {
       <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: 16 }}>
         <div className="stack grow" style={{ gap: 6 }}>
           <h1 className="t-display login-title">{t('myUploads.title')}</h1>
+          {!counts && q.isPending && <Skeleton h={26} w={320} />}
           {counts && (
             <span className="t-body muted tnum">
               {t('myUploads.summary', { active: counts.active, eta: maxEta > 0 ? readyAt(maxEta) : 'none', review: items.filter((i) => i.status === 'needs_review').length })}
@@ -64,11 +66,24 @@ export function MyUploadsScreen() {
       </div>
 
       {q.isPending ? (
-        <div className="stack" style={{ gap: 8 }} aria-busy="true">
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="skel" style={{ height: 72 }} />
-          ))}
-        </div>
+        <section className="stack" style={{ gap: 10 }} aria-busy="true" aria-label={t('states.loading')}>
+          <Skeleton h={30} w={280} />
+          <ul className="filelist panel" style={{ padding: 0 }} aria-hidden="true">
+            {[0, 1, 2, 3].map((i) => (
+              <li key={i}>
+                <Skeleton h={48} w={48} />
+                <div className="stack grow" style={{ gap: 6, flexBasis: 240 }}>
+                  <Skeleton h={18} w={`${55 - i * 6}%`} />
+                  <Skeleton h={14} w="30%" />
+                </div>
+                <div className="stack" style={{ gap: 4, alignItems: 'flex-end', minWidth: 180 }}>
+                  <Skeleton h={28} w={96} />
+                  <Skeleton h={20} w={120} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : !items.length ? (
         <div className="center-col" style={{ maxWidth: 520, margin: '64px auto' }}>
           <Icon name="upload" style={{ width: 32, height: 32, color: 'var(--text-3)' }} />

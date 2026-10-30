@@ -56,6 +56,12 @@ export async function requireAdmin(req: FastifyRequest, _reply: FastifyReply) {
   if (!req.viewer.isAdmin) throw notFound();
 }
 
+/** Signed-out visitors read like a member: everything member-tier is public, core stays 404. Matches no uploader. */
+export const ANON: Viewer = { id: '00000000-0000-0000-0000-000000000000', email: '', name: '', role: 'member', isAdmin: false, status: 'active' };
+
+/** For read-only routes open to everyone. */
+export const readerOf = (req: FastifyRequest): Viewer => req.viewer ?? ANON;
+
 export function viewerOf(req: FastifyRequest): Viewer {
   if (!req.viewer) throw new HttpError('unauthorized');
   return req.viewer;

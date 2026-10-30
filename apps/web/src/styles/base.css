@@ -98,3 +98,26 @@ body { margin: 0; min-height: 100vh; }
 .app .player-controls .btn:hover { background: rgba(255,255,255,.12); }
 .app .player-seek { width: 100%; height: 20px; margin: 0; background: transparent; accent-color: #CFA889; cursor: pointer; }
 .app .player-menu { position: absolute; bottom: 44px; inset-inline-end: 0; min-width: 200px; background: #18191B; border-color: #2E3034; --text: #ECEDEF; --surface-2: #292A2E; --text-3: #8E9198; color: #ECEDEF; }
+/* Loading: the shimmer stops once the image over it has loaded; grid skeleton tiles use the grid's row height. */
+.app .skel:has(> img[data-loaded]) { animation: none; }
+.app .jgrid { --tile-h: 170px; }
+.app .jgrid > .skel { height: var(--tile-h); }
+@media (max-width: 600px) { .app .jgrid { --tile-h: 116px; gap: 3px; } }
+/* Motion (all of it is switched off by the reduced-motion rule in tokens.css). Only opacity and transform move. */
+@keyframes app-rise { from { opacity: 0; transform: translateY(8px); } }
+@keyframes app-fade { from { opacity: 0; } }
+@keyframes app-zoom { from { opacity: 0; transform: scale(.985); } }
+@keyframes app-out { to { opacity: 0; transform: scale(.985); } }
+.app .page { flex: 1; display: flex; flex-direction: column; animation: app-rise .55s var(--ease-out-expo) backwards; }
+/* A direct /p/ visit renders the lightbox inside the page: a transformed ancestor would pin it to the page, not the viewport. */
+.app .page:has(> .lightbox) { animation: none; }
+.app .reveal { animation: app-rise .7s var(--ease-out-expo) backwards; animation-delay: calc(min(var(--i, 0), 12) * 45ms); }
+.app img.fade { opacity: 0; transition: opacity .5s var(--ease-out-expo), transform .8s var(--ease-out-expo); }
+.app img.fade[data-loaded] { opacity: 1; }
+.app .tile:hover img, .app .tile:focus-visible img, .app a:hover > .cover img, .app a:focus-visible > .cover img { transform: scale(1.035); }
+.app .btn, .app .chip, .app .tab, .app .nav a, .app .sidenav a, .app .tabbar a, .app .menu button, .app .pick { transition: background-color .25s var(--ease-out-expo), border-color .25s var(--ease-out-expo), color .25s var(--ease-out-expo); }
+.app a { transition: color .25s var(--ease-out-expo); }
+.app .lightbox { animation: app-fade .3s var(--ease-out-expo) backwards; }
+.app .lightbox .lb-body { animation: app-zoom .5s var(--ease-out-expo) backwards; }
+.app .lightbox[data-closing] { animation: app-out .18s ease-in forwards; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .app .tile img, .app .cover img { transform: none !important; } }

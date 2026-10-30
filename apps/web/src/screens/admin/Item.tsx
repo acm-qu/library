@@ -12,6 +12,7 @@ import { fmtEta } from '../../lib/eta.ts';
 import { Confirm } from '../../ui/Confirm.tsx';
 import { Icon } from '../../ui/Icon.tsx';
 import { Rich } from '../../ui/Rich.tsx';
+import { Skeleton } from '../../ui/Skeleton.tsx';
 import { NotFound } from '../States.tsx';
 
 const CURVE_NAMES: Record<string, string> = { hable203: 'Hable (203 nits)', bt2446a: 'BT.2446-A', bt2390: 'BT.2390', reinhard203: 'Reinhard (203 nits)' };
@@ -32,7 +33,30 @@ export function ItemScreen() {
     if (last?.toneCurve) setPick(last.toneCurve);
   }, [q.data, t]);
   if (q.isError) return q.error instanceof ApiError && q.error.code === 'not_found' ? <NotFound /> : null;
-  if (!q.data) return <div className="skel" style={{ height: 400 }} aria-busy="true" />;
+  if (!q.data)
+    return (
+      <>
+        <Link to="/admin/queue" className="t-sm row" style={{ gap: 6, alignSelf: 'flex-start' }}>
+          <Icon name="back" className="flip" size="sm" />
+          {t('admin.i_back')}
+        </Link>
+        <div className="stack" style={{ gap: 24 }} aria-busy="true" aria-label={t('states.loading')}>
+          <div className="row" style={{ gap: 16, alignItems: 'flex-start' }}>
+            <Skeleton h={72} w={96} />
+            <div className="stack grow" style={{ gap: 8, minWidth: 0 }}>
+              <Skeleton h={40} w="55%" />
+              <Skeleton h={28} w={220} />
+            </div>
+          </div>
+          <div className="panel stack" style={{ gap: 12 }} aria-hidden="true">
+            <Skeleton h={30} w="35%" />
+            <Skeleton h={20} w="80%" />
+            <Skeleton h={20} w="65%" />
+            <Skeleton h={160} />
+          </div>
+        </div>
+      </>
+    );
   const { asset: a, renditions, runs, jobs, reprocessEtaS } = q.data;
   const hdr = a.hdr === 'hlg' || a.hdr === 'pq';
   // The run behind the copies people see now (a re-process in progress has its own, unfinished run).

@@ -5,7 +5,7 @@ import { CreateEventBody, type EventDetail, EventListQuery, Id, PatchEventBody, 
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { requireAdmin, requireCore, requireUser, viewerOf } from '../auth/plugin.ts';
+import { readerOf, requireAdmin, requireCore, viewerOf } from '../auth/plugin.ts';
 import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { mediaUrl } from '../lib/dto.ts';
@@ -72,7 +72,8 @@ function toDetail(r: Row): EventDetail {
     location: r.location,
     description: r.description,
     defaultTier: r.default_tier,
-    coverAssetId: r.cover_asset_id,
+    // Only when the viewer can see the cover; a hidden core cover must not reveal that the item exists.
+    coverAssetId: r.cover_id === r.cover_asset_id ? r.cover_asset_id : null,
     photoCount: r.photo_count,
     videoCount: r.video_count,
     coverUrl: r.cover_id ? mediaUrl(r.cover_id, 'thumb', r.cover_rev ?? 0) : null,
@@ -90,8 +91,8 @@ export async function findVisibleEvent(db: Db, v: Viewer, idOrSlug: string): Pro
 }
 
 export function eventRoutes(app: FastifyInstance, { db }: { db: Db }) {
-  app.get('/api/events', { preHandler: requireUser }, async (req) => {
-    const v = viewerOf(req);
+  app.get('/api/events', async (req) => {
+    const v = readerOf(req);
     const qry = EventListQuery.parse(req.query);
     const where: SQL[] = [];
     if (qry.q) {
@@ -112,14 +113,14 @@ export function eventRoutes(app: FastifyInstance, { db }: { db: Db }) {
   });
 
   /** Distinct years that have visible events, for the year filter. */
-  app.get('/api/events/years', { preHandler: requireUser }, async (req) => {
-    const rows = await queryEvents(db, viewerOf(req), [], 10_000);
+  app.get('/api/events/years', async (req) => {
+    const rows = await queryEvents(db, readerOf(req), [], 10_000);
     return { years: [...new Set(rows.map((r) => Number(r.starts_on.slice(0, 4))))] };
   });
 
-  app.get('/api/events/:idOrSlug', { preHandler: requireUser }, async (req) => {
+  app.get('/api/events/:idOrSlug', async (req) => {
     const { idOrSlug } = z.object({ idOrSlug: z.string().max(200) }).parse(req.params);
-    return findVisibleEvent(db, viewerOf(req), idOrSlug);
+    return findVisibleEvent(db, readerOf(req), idOrSlug);
   });
 
   app.post('/api/events', { preHandler: requireCore }, async (req, reply) => {

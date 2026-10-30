@@ -38,6 +38,8 @@ export const ServerConfig = z
     TONEMAP_CLIPS: z.string().default('./.data/tonemap-validation'),
     /** Built web app (apps/web/dist). Unset in development, where Vite serves the UI and proxies /api. */
     WEB_ROOT: z.string().optional(),
+    /** API log file. Set in production: LiteSpeed's lsnode drops the app's stdout. */
+    LOG_FILE: z.string().optional(),
     UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(20 * 2 ** 30),
     UPLOAD_CHUNK_BYTES: z.coerce.number().int().positive().default(8 * 2 ** 20),
     PRELAUNCH_ALLOWLIST: emailList,

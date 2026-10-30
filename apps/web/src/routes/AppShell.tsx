@@ -1,12 +1,12 @@
-// Signed-in chrome: top bar from the Library board, offline banner, session-expired dialog.
+// App chrome for everyone (signed in or not): top bar from the Library board, offline banner, session-expired dialog.
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Location, Link, matchPath, Navigate, Outlet, useLocation, useNavigate, useRoutes } from 'react-router';
+import { type Location, Link, matchPath, Outlet, useLocation, useNavigate, useRoutes } from 'react-router';
 import { ApiError, onSessionExpired } from '../api/client.ts';
 import { useMe } from '../data/session.ts';
 import { toggleTheme, useTheme } from '../lib/theme.ts';
 import { Lightbox } from '../screens/Lightbox.tsx';
-import { OfflineBanner, ServerError, SessionExpiredDialog } from '../screens/States.tsx';
+import { OfflineBanner, ServerError, SessionExpiredDialog, ShellSkeleton } from '../screens/States.tsx';
 import { VideoPlayer } from '../ui/Player.tsx';
 import { screenRoutes } from './screens.tsx';
 import { Icon } from '../ui/Icon.tsx';
@@ -31,11 +31,11 @@ export function AppShell() {
   const [expired, setExpired] = useState(false);
   useEffect(() => onSessionExpired(() => setExpired(true)), []);
 
-  if (me.isPending) return <div className="center-page" aria-busy="true" aria-label={t('states.loading')} />;
+  if (me.isPending) return <ShellSkeleton />;
   if (me.isError) return <ServerError reference={me.error instanceof ApiError ? me.error.body.reference : undefined} onRetry={() => void me.refetch()} />;
-  if (!me.data) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
   const user = me.data;
-  const isCore = user.role === 'core';
+  const isCore = user?.role === 'core';
+  const signIn = `/login?next=${encodeURIComponent(loc.pathname + loc.search)}`;
   const section = /^\/uploads/.test(loc.pathname) ? 'uploads' : /^\/admin/.test(loc.pathname) ? 'admin' : /^\/(account|upload)\b/.test(loc.pathname) ? null : 'library';
 
   return (
@@ -56,7 +56,7 @@ export function AppShell() {
               {t('nav.myUploads')}
             </Link>
           )}
-          {user.isAdmin && (
+          {user?.isAdmin && (
             <Link to="/admin" aria-current={section === 'admin' ? 'page' : undefined}>
               {t('nav.admin')}
             </Link>
@@ -76,13 +76,20 @@ export function AppShell() {
         <button className="btn btn-g btn-sm btn-ic" aria-label={t('theme.switch')} onClick={toggleTheme}>
           <Icon name={resolved === 'dark' ? 'sun' : 'moon'} />
         </button>
-        <Link to="/account" className="avatar hide-sm" aria-label={t('nav.account', { name: user.name || user.email })} style={{ textDecoration: 'none' }}>
-          {initials(user.name, user.email)}
-        </Link>
+        {user ? (
+          <Link to="/account" className="avatar hide-sm" aria-label={t('nav.account', { name: user.name || user.email })} style={{ textDecoration: 'none' }}>
+            {initials(user.name, user.email)}
+          </Link>
+        ) : (
+          <Link className="btn btn-s btn-sm hide-sm" to={signIn}>
+            {t('nav.signIn')}
+          </Link>
+        )}
       </header>
       <OfflineBanner />
       {/* One route tree for both cases, so opening the lightbox over a grid doesn't remount (or rescroll) it. */}
-      {screens ?? <Outlet />}
+      {/* Keyed on the screen underneath (one key for a direct /p/ visit), so only a real page change replays the entrance. */}
+      <div className="page" key={viewing ? (background?.pathname ?? '/p') : loc.pathname}>{screens ?? <Outlet />}</div>
       {background && viewing && <Lightbox assetId={viewing} background={background} onClose={() => navigate(-1)} player={(a) => <VideoPlayer asset={a} />} />}
       <nav className="tabbar show-sm" aria-label={t('nav.main')} style={{ gridTemplateColumns: `repeat(${isCore ? 4 : 2}, minmax(0, 1fr))` }}>
         <Link to="/" aria-current={section === 'library' ? 'page' : undefined}>
@@ -101,9 +108,9 @@ export function AppShell() {
             {t('nav.myUploads')}
           </Link>
         )}
-        <Link to="/account" aria-current={loc.pathname === '/account' ? 'page' : undefined}>
+        <Link to={user ? '/account' : signIn} aria-current={loc.pathname === '/account' ? 'page' : undefined}>
           <Icon name="person" />
-          {t('nav.accountTab')}
+          {user ? t('nav.accountTab') : t('nav.signIn')}
         </Link>
       </nav>
       {expired && <SessionExpiredDialog />}

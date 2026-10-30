@@ -9,6 +9,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { registerSessions } from './auth/plugin.ts';
+import { SESSION_COOKIE } from './auth/sessions.ts';
 import { registerCsrf } from './lib/csrf.ts';
 import { HttpError, registerErrorHandling } from './lib/errors.ts';
 import { LIMITS } from './lib/limits.ts';
@@ -60,7 +61,7 @@ const CSP = {
 export async function buildApp(deps: AppDeps) {
   const { cfg, db } = deps;
   const app = Fastify({
-    logger: deps.logger ?? { level: cfg.NODE_ENV === 'production' ? 'info' : 'debug', redact: LOG_REDACT },
+    logger: deps.logger ?? { level: cfg.NODE_ENV === 'production' ? 'info' : 'debug', redact: LOG_REDACT, ...(cfg.LOG_FILE ? { file: cfg.LOG_FILE } : {}) },
     // Apache hands requests to Passenger over loopback; the client address is in X-Forwarded-For.
     trustProxy: '127.0.0.1',
     // Short ids like 7F3A-21C9: shown to users as "Reference" on server errors and greppable in the log.
@@ -74,15 +75,14 @@ export async function buildApp(deps: AppDeps) {
   await app.register(helmet, {
     contentSecurityPolicy: { useDefaults: false, directives: CSP },
     referrerPolicy: { policy: 'same-origin' },
-    // HSTS is turned on once AutoSSL is confirmed for library.qu.acm.org.
-    strictTransportSecurity: false,
     crossOriginEmbedderPolicy: false,
   });
   await app.register(cookie);
   await app.register(rateLimit, {
     ...LIMITS.global,
-    // Media byte ranges and 8 MiB upload PATCHes would exhaust a request budget; both are authenticated anyway.
-    allowList: (req) => !req.url.startsWith('/api/') || req.url.startsWith('/api/media/') || req.url.startsWith('/api/uploads'),
+    // Media byte ranges and 8 MiB upload PATCHes would exhaust a request budget. Uploads need core; media is public,
+    // so only signed-in viewers skip the budget and anonymous visitors share the global per-IP limit.
+    allowList: (req) => !req.url.startsWith('/api/') || req.url.startsWith('/api/uploads') || (req.url.startsWith('/api/media/') && !!req.cookies[SESSION_COOKIE]),
     errorResponseBuilder: (_req, ctx) =>
       new HttpError('rate_limited', { retry_after: Math.ceil(ctx.ttl / 1000) }, `Try again in ${ctx.after}.`),
   });

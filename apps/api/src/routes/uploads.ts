@@ -91,6 +91,11 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
       const v = viewerOf(req);
       setInternalHeader(req.raw, USER_HEADER, v.id);
       const id = (req.params as { '*': string })['*'];
+      // An upload belongs to whoever created it; anyone else gets the same 404 as an unknown id.
+      if (id) {
+        const [own] = await db.select({ uploaderId: assets.uploaderId }).from(assets).where(eq(assets.uploadId, id));
+        if (!own || own.uploaderId !== v.id) throw notFound();
+      }
       // A finished upload's tus files are gone; answer a resuming client's HEAD from the asset row instead.
       if (req.method === 'HEAD' && id) {
         const [done] = await db

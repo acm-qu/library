@@ -163,15 +163,17 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
     const offset = decodeCursor(OffsetCursor, q.cursor)?.o ?? 0;
     const queue = await activeJobs(db);
     const eta = new Map(queue.map((j) => [j.jobId, j.readyInS]));
+    // Deleted items leave the queue at once: their purge job is internal, and older jobs lose their asset.
+    const live = sql`(${jobs.kind} <> 'purge' and ${assets.deletedAt} is null and ${assets.status} <> 'deleting')`;
     const base = db
       .select({ j: jobs, a: assets, eventTitle: events.title })
       .from(jobs)
-      .leftJoin(assets, eq(assets.id, jobs.assetId))
+      .innerJoin(assets, eq(assets.id, jobs.assetId))
       .leftJoin(events, eq(events.id, assets.eventId));
     let rows;
-    if (q.tab === 'running') rows = await base.where(eq(jobs.state, 'running')).orderBy(asc(jobs.startedAt)).limit(q.limit + 1).offset(offset);
-    else if (q.tab === 'queued') rows = await base.where(eq(jobs.state, 'queued')).orderBy(desc(jobs.priority), asc(jobs.createdAt)).limit(q.limit + 1).offset(offset);
-    else if (q.tab === 'failed') rows = await base.where(and(eq(jobs.state, 'failed'), sql`${assets.status} = 'failed'`)).orderBy(desc(jobs.finishedAt)).limit(q.limit + 1).offset(offset);
+    if (q.tab === 'running') rows = await base.where(and(live, eq(jobs.state, 'running'))).orderBy(asc(jobs.startedAt)).limit(q.limit + 1).offset(offset);
+    else if (q.tab === 'queued') rows = await base.where(and(live, eq(jobs.state, 'queued'))).orderBy(desc(jobs.priority), asc(jobs.createdAt)).limit(q.limit + 1).offset(offset);
+    else if (q.tab === 'failed') rows = await base.where(and(live, eq(jobs.state, 'failed'), sql`${assets.status} = 'failed'`)).orderBy(desc(jobs.finishedAt)).limit(q.limit + 1).offset(offset);
     else if (q.tab === 'needs_review') {
       // Listed from the asset status (the source of truth), each with its most recent job if there is one.
       const flagged = await db
@@ -190,21 +192,23 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
         return { a, eventTitle, j: j ?? { id: a.id, assetId: a.id, kind: 'process' as const, state: 'done' as const, outcome: 'needs_review' as const, params: {}, priority: 0, attempts: 0, maxAttempts: 3, runAfter: a.updatedAt, step: null, progress: null, estSeconds: null, startedAt: null, finishedAt: a.updatedAt, lastError: null, createdAt: a.createdAt } };
       });
     }
-    else rows = await base.where(and(eq(jobs.state, 'done'), gte(jobs.finishedAt, new Date(Date.now() - 7 * 86400_000)))).orderBy(desc(jobs.finishedAt)).limit(q.limit + 1).offset(offset);
+    else rows = await base.where(and(live, eq(jobs.state, 'done'), gte(jobs.finishedAt, new Date(Date.now() - 7 * 86400_000)))).orderBy(desc(jobs.finishedAt)).limit(q.limit + 1).offset(offset);
 
     const [counts] = await db
       .select({
         running: sql<number>`count(*) filter (where ${jobs.state} = 'running')::int`,
         queued: sql<number>`count(*) filter (where ${jobs.state} = 'queued')::int`,
       })
-      .from(jobs);
-    const [{ failed } = { failed: 0 }] = await db.select({ failed: sql<number>`count(distinct ${jobs.assetId})::int` }).from(jobs).innerJoin(assets, eq(assets.id, jobs.assetId)).where(and(eq(jobs.state, 'failed'), eq(assets.status, 'failed')));
+      .from(jobs)
+      .innerJoin(assets, eq(assets.id, jobs.assetId))
+      .where(live);
+    const [{ failed } = { failed: 0 }] = await db.select({ failed: sql<number>`count(distinct ${jobs.assetId})::int` }).from(jobs).innerJoin(assets, eq(assets.id, jobs.assetId)).where(and(live, eq(jobs.state, 'failed'), eq(assets.status, 'failed')));
     const [{ review } = { review: 0 }] = await db.select({ review: sql<number>`count(*)::int` }).from(assets).where(and(eq(assets.status, 'needs_review'), isNull(assets.deletedAt)));
     const [{ videoS } = { videoS: 0 }] = await db
       .select({ videoS: sql<number>`coalesce(sum(${assets.durationS}), 0)::float` })
       .from(jobs)
       .innerJoin(assets, eq(assets.id, jobs.assetId))
-      .where(and(eq(jobs.state, 'queued'), eq(assets.kind, 'video')));
+      .where(and(live, eq(jobs.state, 'queued'), eq(assets.kind, 'video')));
     const page = rows.slice(0, q.limit);
     return {
       items: page.map(({ j, a, eventTitle }) => ({

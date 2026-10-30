@@ -1,6 +1,6 @@
 import { appSettings, assets, auditLog, events, jobs, sessions, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createSession } from '../src/auth/sessions.ts';
 import { addUser, db, H, useApp } from './helpers.ts';
@@ -14,7 +14,7 @@ async function who(email: string, o: Partial<typeof users.$inferInsert>) {
   const u = await addUser(email, o);
   return { id: u.id, sid: (await createSession(db, u.id, { ip: null, userAgent: null })).token };
 }
-const call = (method: 'GET' | 'POST' | 'PATCH', url: string, sid: string, payload?: object) =>
+const call = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, sid: string, payload?: object) =>
   t.app.inject({ method, url, headers: method === 'GET' ? {} : H, cookies: { sid }, ...(payload ? { payload } : {}) });
 
 beforeEach(async () => {
@@ -92,6 +92,23 @@ describe('queue', () => {
     expect((await call('POST', `/api/admin/jobs/${j1}/retry`, admin.sid)).statusCode).toBe(200);
     expect((await db.select().from(assets).where(eq(assets.id, a1)))[0]!.status).toBe('queued');
     expect((await call('POST', `/api/admin/jobs/${j1}/retry`, admin.sid)).statusCode).toBe(200); // still failed → another copy is fine
+  });
+
+  it('drops deleted items from every tab and count, before and after the purge', async () => {
+    const a = await asset();
+    const done = await asset();
+    await db.insert(jobs).values([
+      { id: newId(), assetId: a, kind: 'process' },
+      { id: newId(), assetId: done, kind: 'process', state: 'done', finishedAt: new Date() },
+    ]);
+    for (const id of [a, done]) expect((await call('DELETE', `/api/assets/${id}`, admin.sid)).statusCode).toBe(204);
+    const tabs = async () => Promise.all(['running', 'queued', 'failed', 'recent'].map(async (tab) => (await call('GET', `/api/admin/jobs?tab=${tab}`, admin.sid)).json()));
+    for (const q of await tabs()) {
+      expect(q.items).toEqual([]);
+      expect(q.summary).toMatchObject({ queued: 0, running: 0, failed: 0, drainS: 0 });
+    }
+    await db.delete(assets).where(inArray(assets.id, [a, done])); // what the purge job does
+    for (const q of await tabs()) expect(q.items).toEqual([]);
   });
 
   it('resolves needs review either way', async () => {

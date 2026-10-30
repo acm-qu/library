@@ -1,6 +1,6 @@
-// Signed-in screens. Shared by the router and by the lightbox's background renderer, which shows the
+// App screens (the library is public; account, upload and admin need a session). Shared by the router and by the lightbox's background renderer, which shows the
 // previous screen under /p/:assetId when the viewer was opened from a grid.
-import { Navigate, type RouteObject } from 'react-router';
+import { Navigate, type RouteObject, useLocation } from 'react-router';
 import { useMe } from '../data/session.ts';
 import { AccountScreen } from '../screens/Account.tsx';
 import { EventScreen } from '../screens/Event.tsx';
@@ -19,10 +19,16 @@ function CoreOnly({ children }: { children: React.ReactNode }) {
   return useMe().data?.role === 'core' ? <>{children}</> : <NotFound />;
 }
 
+/** Screens that only make sense with a session send signed-out visitors to sign in, then back. */
+function SignedIn({ children }: { children: React.ReactNode }) {
+  const loc = useLocation();
+  return useMe().data ? <>{children}</> : <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
+}
+
 export const screenRoutes: RouteObject[] = [
   { index: true, element: <LibraryScreen /> },
   { path: 'events/:slug', element: <EventScreen /> },
-  { path: 'account', element: <AccountScreen /> },
+  { path: 'account', element: <SignedIn><AccountScreen /></SignedIn> },
   { path: 'upload', element: <CoreOnly><UploadScreen /></CoreOnly> },
   { path: 'uploads', element: <CoreOnly><MyUploadsScreen /></CoreOnly> },
   {

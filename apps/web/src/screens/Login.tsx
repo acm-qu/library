@@ -284,7 +284,9 @@ function LoginTopRow() {
   const { resolved } = useTheme();
   return (
     <div className="row" style={{ justifyContent: 'space-between', gap: 16, padding: '24px var(--login-pad)' }}>
-      <span className="brand">{t('brand')}</span>
+      <Link className="brand" to="/">
+        {t('brand')}
+      </Link>
       <div className="row" style={{ gap: 4 }}>
         <button className="btn btn-g btn-sm btn-ic" aria-label={t('theme.switch')} onClick={toggleTheme}>
           <Icon name={resolved === 'dark' ? 'sun' : 'moon'} />

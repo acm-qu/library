@@ -78,6 +78,25 @@ describe('GET /events', () => {
   });
 });
 
+describe('signed-out visitors', () => {
+  it('browse the member tier like a member, without uploader names, and get 404 for core', async () => {
+    const ev = await addEvent('Hackathon', '2026-10-17');
+    const pub = await addAsset(ev);
+    const hidden = await addAsset(ev, { tier: 'core' });
+    await addEvent('Core only', '2026-09-01').then((id) => addAsset(id, { tier: 'core' }));
+    const anon = (url: string) => t.app.inject({ method: 'GET', url });
+
+    expect((await anon('/api/events')).json().items.map((e: { title: string }) => e.title)).toEqual(['Hackathon']);
+    expect((await anon(`/api/events/${ev}/assets`)).json().items.map((x: { id: string }) => x.id)).toEqual([pub]);
+    const detail = await anon(`/api/assets/${pub}`);
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ uploader: null, canEdit: false, canDelete: false });
+    expect((await anon(`/api/assets/${hidden}`)).statusCode).toBe(404);
+    expect((await anon(`/api/media/${hidden}/thumb`)).statusCode).toBe(404);
+    expect((await get(`/api/assets/${pub}`, member)).json().uploader).toMatchObject({ id: coreId });
+  });
+});
+
 describe('event writes', () => {
   it('core creates events with immutable, unique slugs; members get 404', async () => {
     const body = { title: 'Hackathon, day 1', startsOn: '2026-10-28', defaultTier: 'member' };
