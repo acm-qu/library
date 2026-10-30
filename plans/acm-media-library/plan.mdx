@@ -978,7 +978,7 @@ All routes live under `/api`. Errors are `{error, message}`, and pagination uses
     ["POST · DELETE", "/uploads/tickets · /uploads/tickets/:id", "core (own; create is rate-limited)", "Upload (one ticket per file; cancel or pause gives it back)"],
     ["GET", "/uploads/queue", "core", "Upload queue panel (Upload step 3, My uploads); polled every 5 s while the tab holds unstarted tickets"],
     ["GET", "/uploads/mine?cursor=", "core", "My uploads, resume banner, shell processing indicator"],
-    ["GET", "/uploads/progress", "core", "One query: the caller's unfinished uploads with status, step and progress; My uploads polls it every second and re-fetches /uploads/mine only when a status changes"],
+    ["GET", "/uploads/progress", "core", "One query: the caller's unfinished uploads with status, step and progress; My uploads polls it every 2 s and re-fetches /uploads/mine only when a status changes"],
     ["POST", "/uploads/:assetId/retry", "core (own)", "My uploads (Retry)"],
     ["GET / POST", "/admin/users · /admin/users/bulk", "admin", "Admin · Members"],
     ["PATCH", "/admin/users/:id", "admin", "Admin · Members"],
