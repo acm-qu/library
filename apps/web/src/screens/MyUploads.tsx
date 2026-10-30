@@ -22,7 +22,7 @@ export function MyUploadsScreen() {
   const [bucket, setBucket] = useState<Bucket>('all');
   const tabs = useTabIndicator<HTMLDivElement>('line-bottom', bucket);
   useRefreshOnUploadChange();
-  const q = useMyUploads(bucket);
+  const q = useMyUploads(bucket, true, true);
   const items = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
   const counts = q.data?.pages[0]?.counts;
   useEffect(() => {

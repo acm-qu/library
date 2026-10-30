@@ -4,8 +4,11 @@ import { useEffect } from 'react';
 import * as api from '../api/uploads.ts';
 import { type Item, uploader, useUploads } from '../lib/uploader.ts';
 
-/** Polls every 4 s while something is uploading or processing (its progress bar moves), 15 s while anything else is unfinished. */
-export function useMyUploads(bucket: api.Bucket, enabled = true) {
+/**
+ * Polls while something is uploading or processing (its progress bar moves): every 1 s on the My uploads page
+ * (`live`), 4 s elsewhere (the top bar's chip, on every page); 15 s while anything else is unfinished.
+ */
+export function useMyUploads(bucket: api.Bucket, enabled = true, live = false) {
   return useInfiniteQuery({
     queryKey: ['uploads', 'mine', bucket],
     queryFn: ({ pageParam }) => api.getMyUploads(bucket, pageParam),
@@ -15,7 +18,7 @@ export function useMyUploads(bucket: api.Bucket, enabled = true) {
     refetchInterval: (query) => {
       const pages = query.state.data?.pages ?? [];
       const items = pages.flatMap((p) => p.items);
-      if (items.some((i) => i.status === 'uploading' || i.status === 'processing')) return 4_000;
+      if (items.some((i) => i.status === 'uploading' || i.status === 'processing')) return live ? 1_000 : 4_000;
       return pages[0] && (pages[0].counts.active > 0 || items.some((i) => isUnfinished(i.status))) ? 15_000 : false;
     },
   });
