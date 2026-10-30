@@ -164,6 +164,10 @@
 .app .progress{height:4px;background:var(--surface-3);overflow:hidden}
 .app .progress > span{display:block;height:100%;background:var(--primary-fg)}
 .app .progress.info > span{background:var(--info)}
+.app .progress.warn > span{background:var(--warn)}
+.app .progress.busy > span{width:35%;animation:app-busy 1.4s var(--ease-out-expo) infinite}
+@keyframes app-busy{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
+[dir=rtl] .app .progress.busy > span{animation-direction:reverse}
 .app .kbd{display:inline-grid;place-items:center;min-width:24px;height:22px;padding:0 6px;border:1px solid var(--border-strong);font-size:12px;font-weight:600;color:var(--text-2)}
 
 /* tables */

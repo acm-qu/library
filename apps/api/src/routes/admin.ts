@@ -28,6 +28,7 @@ import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { thumbUrl } from '../lib/dto.ts';
 import { HttpError, notFound } from '../lib/errors.ts';
+import { computeUsage } from '../lib/compute.ts';
 import { activeJobs, drainOf, loadRho } from '../lib/queue.ts';
 import { sendFile, sendSealed } from './media.ts';
 
@@ -377,6 +378,8 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
   });
 
   // ── Storage and settings ───────────────────────────────────────────────────────────────────────────
+  app.get('/api/admin/compute', { preHandler: requireAdmin }, async () => computeUsage());
+
   app.get('/api/admin/storage', { preHandler: requireAdmin }, async () => {
     type Stats = { at: string; bytesOriginals: number; bytesRenditions: number; files: number; byKind?: { originals: number; photoCopies: number; videoFiles: number; other: number } };
     const stats = await setting<Stats>(db, 'storage_stats');

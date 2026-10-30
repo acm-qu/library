@@ -1,10 +1,12 @@
-// Admin · Processing queue: health summary, tabs (running, queued, failed, needs review, recent) and actions.
+// Admin · Processing: queue summary, live compute against the host's limits, tabs (running, queued, failed, needs
+// review, recent) and actions.
+import type { ComputeReport } from '@acm/core/schemas';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import * as api from '../../api/admin.ts';
-import { useAdminMutation, useJobs } from '../../data/admin.ts';
-import { fmtDateTime, fmtDuration, readyAt } from '../../i18n/format.ts';
+import { useAdminMutation, useCompute, useJobs } from '../../data/admin.ts';
+import { fmtBytes, fmtDateTime, fmtDuration, readyAt } from '../../i18n/format.ts';
 import { fmtEta } from '../../lib/eta.ts';
 import { Icon } from '../../ui/Icon.tsx';
 import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
@@ -17,6 +19,7 @@ export function QueueScreen() {
   const [tab, setTab] = useState<api.JobTab>('queued');
   const tabs = useTabIndicator<HTMLDivElement>('line-bottom', tab);
   const q = useJobs(tab);
+  const compute = useCompute();
   const s = q.data?.summary;
   useEffect(() => {
     document.title = `${t('admin.queue')} · ${t('brand')}`;
@@ -26,7 +29,7 @@ export function QueueScreen() {
   const counts: Record<api.JobTab, number | undefined> = { running: s?.running, queued: s?.queued, failed: s?.failed, needs_review: s?.needsReview, recent: undefined };
   const items = q.data?.items ?? [];
   const tick = s?.workerTick ? new Date(s.workerTick) : null;
-  const stale = tick ? Date.now() - tick.getTime() > 3 * 60_000 : true; // the API drops ETAs at the same age
+  const stale = tick ? Date.now() - tick.getTime() > 5 * 60_000 : true; // the API drops ETAs at the same age
   const fmt = (i: api.AdminJobItem) => (i.asset?.kind === 'image' ? t('admin.fmt_photo') : t(`admin.fmt_${(i.asset?.hdr ?? 'sdr') as 'sdr'}`));
   const name = (i: api.AdminJobItem) => (
     <div className="stack" style={{ minWidth: 0 }}>
@@ -54,7 +57,7 @@ export function QueueScreen() {
       </div>
 
       {!s && q.isPending && (
-        <div className="row" style={{ gap: 12, flexWrap: 'wrap' }} aria-hidden="true">
+        <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'stretch' }} aria-hidden="true">
           {[0, 1, 2].map((n) => (
             <div key={n} className="panel stack" style={{ flex: '1 1 220px', gap: 4, padding: 20 }}>
               <Skeleton h={16} w="45%" />
@@ -66,7 +69,7 @@ export function QueueScreen() {
       )}
       {!s && q.isPending && <Skeleton h={20} w={260} />}
       {s && (
-        <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'stretch' }}>
           <Stat label={t('admin.q_waiting')} value={String(s.running + s.queued)} note={t('admin.q_waitingNote', { running: s.running, queued: s.queued })} />
           <Stat label={t('admin.q_video')} value={s.queuedVideoS ? fmtEta(s.queuedVideoS) : '0'} note={t('admin.q_timesHelp').split('.')[0]!} />
           <Stat
@@ -81,6 +84,7 @@ export function QueueScreen() {
           {!tick ? t('admin.q_workerNever') : stale ? t('admin.q_workerStale', { time: fmtDateTime(tick.toISOString()) }) : t('admin.q_worker', { time: fmtDateTime(tick.toISOString()) })}
         </span>
       )}
+      {compute.data && <Compute c={compute.data} />}
 
       <div ref={tabs} className="tabs" role="tablist" aria-label={t('admin.queue')}>
         {TABS.map((x) => (
@@ -281,12 +285,42 @@ export function QueueScreen() {
   );
 }
 
-function Stat({ label, value, note }: { label: string; value: string; note: string }) {
+function Stat({ label, value, note, used }: { label: string; value: string; note: string; used?: number }) {
   return (
     <div className="panel stack" style={{ flex: '1 1 220px', gap: 4, padding: 20 }}>
       <span className="t-over">{label}</span>
       <span className="t-h1 tnum">{value}</span>
+      {used !== undefined && (
+        <div className={`progress${used >= 0.8 ? ' warn' : ''}`} role="presentation">
+          <span style={{ width: `${Math.min(100, used * 100)}%` }} />
+        </div>
+      )}
       <span className="t-sm muted">{note}</span>
     </div>
+  );
+}
+
+/** Threads, CPU and disk IO for the whole hosting account (all sites), with this app's share, against the limits. */
+function Compute({ c }: { c: ComputeReport }) {
+  const { t } = useTranslation();
+  const io = (b: number) => t('admin.c_perSecond', { size: fmtBytes(b) });
+  return (
+    <section className="stack" style={{ gap: 8 }} aria-labelledby="h-compute">
+      <h2 className="t-h3" id="h-compute">
+        {t('admin.c_title')}
+      </h2>
+      {c.available ? (
+        <>
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'stretch' }}>
+            <Stat label={t('admin.c_threads')} value={t('admin.c_of', { n: c.threads, limit: c.limits.threads })} used={c.threads / c.limits.threads} note={t('admin.c_app', { value: c.app.threads })} />
+            <Stat label={t('admin.c_cpu')} value={t('admin.c_ofPct', { n: c.cpuPct, limit: c.limits.cpuPct })} used={c.cpuPct / c.limits.cpuPct} note={t('admin.c_app', { value: `${c.app.cpuPct}%` })} />
+            <Stat label={t('admin.c_io')} value={io(c.ioBps)} used={c.ioBps / c.limits.ioBps} note={t('admin.c_appOf', { value: io(c.app.ioBps), limit: io(c.limits.ioBps) })} />
+          </div>
+          <span className="help">{t('admin.c_help')}</span>
+        </>
+      ) : (
+        <span className="help">{t('admin.c_unavailable')}</span>
+      )}
+    </section>
   );
 }

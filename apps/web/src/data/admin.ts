@@ -22,6 +22,8 @@ export const useJobs = (tab: api.JobTab) =>
 export const useProcessing = (id: string) =>
   useQuery({ queryKey: ['admin', 'processing', id], queryFn: () => api.getProcessing(id), refetchInterval: (q) => (q.state.data?.jobs.some((j) => j.state === 'queued' || j.state === 'running') ? 15_000 : false) });
 export const useStorage = () => useQuery({ queryKey: ['admin', 'storage'], queryFn: api.getStorage });
+/** Each call samples the server for 1 s; every 15 s while the Processing page is open. */
+export const useCompute = () => useQuery({ queryKey: ['admin', 'compute'], queryFn: api.getCompute, refetchInterval: 15_000 });
 export const useSettings = () => useQuery({ queryKey: ['admin', 'settings'], queryFn: api.getSettings });
 
 /** Mutations refresh everything admin-related (and the library, whose tiles may change). */

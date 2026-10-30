@@ -80,6 +80,11 @@ export const AppSettings = z.object({
 });
 export const PatchSettingsBody = z.object({ tonemapAuto: z.boolean(), inodeLimit: z.number().int().positive().nullable() }).partial();
 
+const Usage = z.object({ threads: z.number().int(), cpuPct: z.number(), ioBps: z.number() });
+/** Live account usage against the host's limits (Admin › Processing). `available` is false off Linux. */
+export const ComputeReport = Usage.extend({ available: z.boolean(), app: Usage, limits: Usage });
+export type ComputeReport = z.infer<typeof ComputeReport>;
+
 export const StorageReport = z.object({
   measuredAt: z.string().nullable(),
   bytesOriginals: z.number(),

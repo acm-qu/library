@@ -8,6 +8,7 @@ import type { Bucket } from '../api/uploads.ts';
 import { useMe } from '../data/session.ts';
 import { useMyUploads, useRetry } from '../data/uploads.ts';
 import { fmtBytes, fmtDate, fmtDuration, fmtTime, readyAt } from '../i18n/format.ts';
+import { useUploads } from '../lib/uploader.ts';
 import { Icon, type IconName } from '../ui/Icon.tsx';
 import { Skeleton } from '../ui/Skeleton.tsx';
 import { useTabIndicator } from '../ui/useTabIndicator.ts';
@@ -158,6 +159,10 @@ function Row({ r, isAdmin }: { r: { item: MyUploadItem; more: number; bytes: num
           : i.status === 'queued' || i.status === 'processing'
             ? t('myUploads.waitingProcessor')
             : '';
+  // Uploading in this browser: bytes sent so far. Processing: the job's progress. Otherwise a moving "busy" bar.
+  const local = useUploads().find((u) => u.status === 'uploading' && u.file.name === i.filename && u.total === i.bytes);
+  const busy = i.status === 'uploading' || i.status === 'processing';
+  const pct = i.status === 'processing' ? i.progress : local?.total ? local.sent / local.total : null;
   const err = i.status === 'failed' || i.status === 'needs_review' ? t(`uploadErrors.${(i.error ?? 'generic') as 'generic'}`, { defaultValue: t('uploadErrors.generic') }) : null;
 
   return (
@@ -167,6 +172,19 @@ function Row({ r, isAdmin }: { r: { item: MyUploadItem; more: number; bytes: num
         <bdi className="truncate">{r.more ? t('myUploads.collapsed', { name: i.filename, n: r.more }) : i.filename}</bdi>
         <span className="t-sm muted tnum">{meta}</span>
         {err && <span className="t-sm" style={{ color: i.status === 'failed' ? 'var(--danger)' : 'var(--review)' }}>{err}</span>}
+        {busy && (
+          <div
+            className={`progress${pct == null ? ' busy' : ''}`}
+            role="progressbar"
+            aria-label={t('myUploads.progressLabel', { name: i.filename })}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct == null ? undefined : Math.round(pct * 100)}
+            style={{ marginTop: 6 }}
+          >
+            <span style={pct == null ? undefined : { width: `${Math.round(pct * 100)}%` }} />
+          </div>
+        )}
       </div>
       <div className="stack" style={{ gap: 4, alignItems: 'flex-end', minWidth: 180 }}>
         <span className={`st ${cls}`}>

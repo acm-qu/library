@@ -49,7 +49,7 @@ Install `deploy/crontab.template` with `crontab`. Or add each line in cPanel's C
 
 ## Everyday checks
 
-- **Admin · Processing queue** shows when the worker last checked in. Cron starts the worker every 2 minutes (and uploads
+- **Admin · Processing** shows when the worker last checked in. Cron starts the worker every 2 minutes (and uploads
   start it at once), so a time more than about 5 minutes old means cron stopped; the app then shows "Waiting for the
   processor" and `health.sh` mails after 10 minutes. Check `crontab -l` and `~/logs/acm-worker.log`.
 - **Admin · Storage** shows file count against the host's limit. The limit is unknown until A2 confirms it; enter

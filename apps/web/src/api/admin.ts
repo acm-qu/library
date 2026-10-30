@@ -1,4 +1,4 @@
-import { AdminJobPage, AdminUser, AppSettings, BulkUsersResult, ProcessingReport, StorageReport } from '@acm/core/schemas';
+import { AdminJobPage, AdminUser, AppSettings, BulkUsersResult, ComputeReport, ProcessingReport, StorageReport } from '@acm/core/schemas';
 import { z } from 'zod';
 import { call, q } from './client.ts';
 
@@ -31,6 +31,7 @@ export const resolveAsset = (id: string, action: 'process_default' | 'original_o
 export const reprocess = (id: string, toneCurve?: string) => call(null, `/admin/assets/${id}/reprocess`, { method: 'POST', json: toneCurve ? { toneCurve } : {} });
 export const getProcessing = (id: string) => call(ProcessingReport, `/admin/assets/${id}/processing`);
 export const getStorage = () => call(StorageReport, '/admin/storage');
+export const getCompute = () => call(ComputeReport, '/admin/compute');
 export const getSettings = () => call(AppSettings, '/admin/settings');
 export const patchSettings = (b: Partial<{ tonemapAuto: boolean; inodeLimit: number | null }>) => call(null, '/admin/settings', { method: 'PATCH', json: b });
 export const patchAsset = (id: string, b: { tier?: 'member' | 'core' }) => call(null, `/assets/${id}`, { method: 'PATCH', json: b });
