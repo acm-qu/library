@@ -150,9 +150,28 @@ export function EventEditDialog({ slug, onClose, onDeleted }: { slug: string; on
   useEffect(() => {
     if (!ref.current?.open) ref.current?.showModal(); // StrictMode runs this twice
   }, []);
-  const close = () => ref.current?.close(); // fires onClose, like Esc
+  // Plays the exit animation before closing; close() fires onClose. Esc goes through here too (onCancel).
+  const close = () => {
+    const d = ref.current;
+    if (!d?.open || d.classList.contains('closing')) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return d.close();
+    d.classList.add('closing');
+    setTimeout(() => {
+      d.classList.remove('closing');
+      d.close();
+    }, 180);
+  };
   return (
-    <dialog ref={ref} className="dialog" aria-labelledby="ee-t" onClose={onClose} style={{ width: 'min(560px, 100% - 32px)', maxWidth: 'none', padding: 24, color: 'inherit' }}>
+    <dialog
+      ref={ref}
+      className="dialog"
+      aria-labelledby="ee-t"
+      onClose={onClose}
+      onCancel={(e) => {
+        e.preventDefault();
+        close();
+      }}
+      style={{ width: 'min(560px, 100% - 32px)', maxWidth: 'none', padding: 24, color: 'inherit' }}>
       <div className="stack" style={{ gap: 16 }}>
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <h2 className="t-h2" id="ee-t">
