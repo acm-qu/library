@@ -82,8 +82,6 @@ export function assetRoutes(app: FastifyInstance, { db }: { db: Db }) {
       viewUrl: full && a.kind === 'image' && has('image_view') ? mediaUrl(a.id, 'view', a.renditionRev) : null,
       posterUrl: full && a.kind === 'video' && has('video_poster') ? mediaUrl(a.id, 'poster', a.renditionRev) : null,
       hlsUrl: full && a.kind === 'video' && has('hls_master') ? `/api/media/${a.id}/hls/master.m3u8?v=${a.renditionRev}` : null,
-      jpegUrl: atLeast(level, 'download') && has('image_jpeg') ? mediaUrl(a.id, 'jpeg', a.renditionRev) : null,
-      jpegSize: atLeast(level, 'download') ? (rends.find((r) => r.kind === 'image_jpeg')?.bytes ?? null) : null,
       originalUrl: atLeast(level, 'download') ? `/api/media/${a.id}/original` : null,
       variants: rends
         .filter((r) => r.kind === 'hls_variant')

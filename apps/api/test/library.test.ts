@@ -163,10 +163,9 @@ describe('asset detail and edits', () => {
     const heic = await addAsset(ev);
     await db.insert(renditions).values([
       { id: newId(), assetId: heic, kind: 'image_view', bytes: 1, relPath: 'r0/view.webp', settingsVersion: 1 },
-      { id: newId(), assetId: heic, kind: 'image_jpeg', bytes: 1, relPath: 'r0/download.jpg', settingsVersion: 1 },
     ]);
     const d = (await get(`/api/assets/${heic}`, member)).json();
-    expect(d).toMatchObject({ viewUrl: `/api/media/${heic}/view?v=0`, jpegUrl: `/api/media/${heic}/jpeg?v=0`, originalUrl: `/api/media/${heic}/original`, canEdit: false, canDelete: false, downloadName: 'IMG.HEIC' });
+    expect(d).toMatchObject({ viewUrl: `/api/media/${heic}/view?v=0`, originalUrl: `/api/media/${heic}/original`, canEdit: false, canDelete: false, downloadName: 'IMG.HEIC' });
     const coreItem = await addAsset(ev, { tier: 'core' });
     expect((await get(`/api/assets/${coreItem}`, member)).statusCode).toBe(404);
     expect((await get('/api/assets/not-a-uuid', member)).statusCode).toBe(404);

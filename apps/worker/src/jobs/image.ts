@@ -12,7 +12,7 @@ import { publish, type Out } from './publish.ts';
 type FileOut = { file: string; width: number; height: number; bytes: number };
 type ImagesResult =
   | { needs_review: string; width: number; height: number }
-  | { width: number; height: number; captured_at: string | null; device: string | null; files: { view: FileOut; thumb: FileOut; jpeg?: FileOut } };
+  | { width: number; height: number; captured_at: string | null; device: string | null; files: { view: FileOut; thumb: FileOut } };
 
 export async function processImage(ctx: Ctx, jobId: string, a: Asset, src: string, scope: JobScope, force = false): Promise<'ok' | 'needs_review'> {
   const tmp = tmpDir(ctx.cfg.MEDIA_ROOT, jobId);
@@ -21,10 +21,9 @@ export async function processImage(ctx: Ctx, jobId: string, a: Asset, src: strin
   await mkdir(out, { recursive: true });
   try {
     await scope.step('Making previews', 0.2);
-    const heic = a.originalExt === 'heic' || a.originalExt === 'heif';
     let r: ImagesResult;
     try {
-      r = await mediaworker<ImagesResult>(ctx.cfg.PYTHON, ['images', '--src', src, '--out', out, ...(heic ? ['--jpeg'] : []), ...(force ? ['--allow-hdr'] : [])], { timeoutMs: 180_000 });
+      r = await mediaworker<ImagesResult>(ctx.cfg.PYTHON, ['images', '--src', src, '--out', out, ...(force ? ['--allow-hdr'] : [])], { timeoutMs: 180_000 });
     } catch (e) {
       // Pillow can't open it: the file is truncated or not really an image. Retrying won't help.
       if (e instanceof ChildFailed && ['UnidentifiedImageError', 'OSError', 'DecompressionBombError', 'SyntaxError'].includes(e.code)) throw new Permanent('decode_failed', e.message);
@@ -38,7 +37,6 @@ export async function processImage(ctx: Ctx, jobId: string, a: Asset, src: strin
     let outs: Out[] = [
       { kind: 'image_view', ...r.files.view },
       { kind: 'image_thumb', ...r.files.thumb },
-      ...(r.files.jpeg ? [{ kind: 'image_jpeg' as const, ...r.files.jpeg }] : []),
     ];
     if (wantsEncryption(a)) {
       const { fileKey } = await getOrCreateKeys(ctx, a.id);

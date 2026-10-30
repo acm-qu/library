@@ -268,20 +268,10 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
               )}
             </dl>
             {a.originalUrl && (
-              <div className="stack" style={{ gap: 8 }}>
-                <a className="btn btn-p btn-block" href={a.originalUrl} download={a.downloadName}>
-                  <Icon name="download" />
-                  {t('viewer.downloadOriginal', { format: a.originalFilename.split('.').pop()?.toUpperCase() ?? '', size: fmtBytes(a.originalSize ?? 0) })}
-                </a>
-                {a.jpegUrl && (
-                  <>
-                    <a className="btn btn-s btn-block" href={a.jpegUrl} download>
-                      {t('viewer.downloadJpeg', { size: fmtBytes(a.jpegSize ?? 0) })}
-                    </a>
-                    <span className="help">{t('viewer.heicHelp')}</span>
-                  </>
-                )}
-              </div>
+              <a className="btn btn-p btn-block" href={a.originalUrl} download={a.downloadName}>
+                <Icon name="download" />
+                {t('viewer.downloadOriginal', { format: a.originalFilename.split('.').pop()?.toUpperCase() ?? '', size: fmtBytes(a.originalSize ?? 0) })}
+              </a>
             )}
             {me?.role === 'core' && a.kind === 'image' && a.status === 'ready' && event.data && (
               event.data.coverAssetId === a.id ? (

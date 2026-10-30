@@ -40,8 +40,6 @@ export const AssetDetail = AssetTile.extend({
   viewUrl: z.string().nullable(),
   posterUrl: z.string().nullable(),
   hlsUrl: z.string().nullable(),
-  jpegUrl: z.string().nullable(),
-  jpegSize: z.number().int().nullable(),
   originalUrl: z.string().nullable(),
   variants: z.array(z.object({ label: z.string(), height: z.number().int(), bandwidth: z.number().int() })),
   canEdit: z.boolean(),

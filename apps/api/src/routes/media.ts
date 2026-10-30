@@ -21,7 +21,6 @@ const KINDS: Record<string, { kinds: RenditionKind[]; min: 'full' | 'download'; 
   thumb: { kinds: ['image_thumb', 'video_thumb'], min: 'full', type: 'image/webp' },
   view: { kinds: ['image_view'], min: 'full', type: 'image/webp' },
   poster: { kinds: ['video_poster'], min: 'full', type: 'image/webp' },
-  jpeg: { kinds: ['image_jpeg'], min: 'download', type: 'image/jpeg' },
 };
 
 /** Stream a plaintext file with Range support. */
@@ -142,7 +141,6 @@ export function mediaRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
     if (!r) throw notFound();
     const file = path.join(assetDir(cfg.MEDIA_ROOT, a.id), r.relPath);
     const extra: Record<string, string> = { 'Cache-Control': IMMUTABLE };
-    if (what === 'jpeg') extra['Content-Disposition'] = attachment(a.originalFilename.replace(/\.[^.]+$/, '') + '.jpg');
     if (r.encrypted) return sendSealed(req, reply, file, (await keysOf(a.id)).fileKey, a.id, spec.type, extra);
     return sendFile(req, reply, file, spec.type, extra);
   });

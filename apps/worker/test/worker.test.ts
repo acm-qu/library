@@ -81,13 +81,13 @@ describe('image jobs', () => {
     expect((await readdir(assetDir(media, id))).sort()).toEqual(['original.jpg', 'r2']);
   });
 
-  it.runIf(existsSync(SAMPLE_HEIC))('makes a JPEG copy for HEIC and reads capture metadata', async () => {
+  it.runIf(existsSync(SAMPLE_HEIC))('processes HEIC into WebP copies and reads capture metadata', async () => {
     const { id } = await queuedImage(SAMPLE_HEIC, 'heic');
     await runUntil(ctx);
     const [a] = await db.select().from(assets).where(eq(assets.id, id));
     expect(a!.status).toBe('ready');
     expect(a!.capturedAt).not.toBeNull();
-    expect((await db.select().from(renditions).where(eq(renditions.assetId, id))).map((r) => r.kind).sort()).toEqual(['image_jpeg', 'image_thumb', 'image_view']);
+    expect((await db.select().from(renditions).where(eq(renditions.assetId, id))).map((r) => r.kind).sort()).toEqual(['image_thumb', 'image_view']);
   });
 
   it('fails an undecodable file at once, without retries', async () => {

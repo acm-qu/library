@@ -27,7 +27,7 @@ export async function storageStats(ctx: Ctx, now = new Date()) {
     } else {
       bytesRenditions += size;
       if (/[\\/]hls[\\/]/.test(p)) byKind.videoFiles++; // playlists and data.ts
-      else if (/[\\/]r\d+[\\/]/.test(p)) byKind.photoCopies++; // view, thumb, JPEG, poster
+      else if (/[\\/]r\d+[\\/]/.test(p)) byKind.photoCopies++; // view, thumb, poster
       else byKind.other++;
     }
   });

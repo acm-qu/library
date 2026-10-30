@@ -1,10 +1,9 @@
 """Image renditions (handoff §8.3).
 
-``python -m mediaworker images --src FILE --out DIR [--jpeg]`` writes:
+``python -m mediaworker images --src FILE --out DIR`` writes:
 
 - ``view.webp``  long edge <= 2560, quality 82, method 4
 - ``thumb.webp`` long edge <= 480, quality 75
-- ``download.jpg`` (with ``--jpeg``; used for HEIC/HEIF) sRGB, quality 90, capture date and camera kept
 
 and prints one JSON object with the oriented size, capture time, camera and whether the still is true HDR.
 Never upscales. EXIF rotation is applied, embedded ICC profiles (iPhone Display P3) are converted to sRGB,
@@ -30,7 +29,6 @@ except ImportError:  # pragma: no cover - the worker venv always has it
 
 VIEW_EDGE, VIEW_Q = 2560, 82
 THUMB_EDGE, THUMB_Q = 480, 75
-JPEG_Q = 90
 Image.MAX_IMAGE_PIXELS = 250_000_000  # ~16k x 16k; larger is almost certainly not a photo
 
 _SRGB = ImageCms.createProfile("sRGB")
@@ -94,7 +92,7 @@ def _is_hdr_still(im: Image.Image) -> bool:
     return transfer in (16, 18)  # SMPTE ST 2084 (PQ), ARIB STD-B67 (HLG)
 
 
-def process(src: str, out: str, jpeg: bool = False, allow_hdr: bool = False) -> dict[str, Any]:
+def process(src: str, out: str, allow_hdr: bool = False) -> dict[str, Any]:
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     with Image.open(src) as opened:
@@ -119,19 +117,6 @@ def process(src: str, out: str, jpeg: bool = False, allow_hdr: bool = False) -> 
         "view": {"file": "view.webp", "width": view.width, "height": view.height},
         "thumb": {"file": "thumb.webp", "width": thumb.width, "height": thumb.height},
     }
-    if jpeg:
-        keep = Image.Exif()
-        for tag in (EXIF_MAKE, EXIF_MODEL):
-            if exif.get(tag):
-                keep[tag] = exif[tag]
-        sub = exif.get_ifd(EXIF_IFD)
-        if sub.get(EXIF_DATETIME_ORIGINAL):
-            keep.get_ifd(EXIF_IFD)[EXIF_DATETIME_ORIGINAL] = sub[EXIF_DATETIME_ORIGINAL]
-            if sub.get(EXIF_OFFSET_TIME_ORIGINAL):
-                keep.get_ifd(EXIF_IFD)[EXIF_OFFSET_TIME_ORIGINAL] = sub[EXIF_OFFSET_TIME_ORIGINAL]
-        im.save(out_dir / "download.jpg", "JPEG", quality=JPEG_Q, optimize=True, exif=keep.tobytes(), icc_profile=ImageCms.ImageCmsProfile(_SRGB).tobytes())
-        files["jpeg"] = {"file": "download.jpg", "width": im.width, "height": im.height}
-
     for f in files.values():
         f["bytes"] = os.path.getsize(out_dir / f["file"])
     make = str(exif.get(EXIF_MAKE) or "").strip("\x00 ")
@@ -152,7 +137,6 @@ def main(args: list[str]) -> dict[str, Any]:
     p = argparse.ArgumentParser(prog="mediaworker images")
     p.add_argument("--src", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--jpeg", action="store_true")
     p.add_argument("--allow-hdr", action="store_true")
     a = p.parse_args(args)
-    return process(a.src, a.out, a.jpeg, a.allow_hdr)
+    return process(a.src, a.out, a.allow_hdr)

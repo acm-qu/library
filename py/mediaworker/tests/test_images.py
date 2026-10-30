@@ -57,20 +57,11 @@ def test_p3_profile_is_converted_to_srgb(tmp_path):
     assert r["width"] == 64
 
 
-def test_jpeg_copy_keeps_capture_metadata(tmp_path):
-    src = tmp_path / "IMG.JPG"
-    _jpeg_with_orientation(src, size=(800, 600), orientation=1)
-    r = images.process(str(src), str(tmp_path / "out"), jpeg=True)
-    assert r["files"]["jpeg"]["bytes"] > 0
-    with Image.open(tmp_path / "out" / "download.jpg") as j:
-        assert j.getexif().get_ifd(0x8769)[0x9003] == "2026:10:17 21:47:05"
-
-
 @pytest.mark.skipif(not SAMPLE_HEIC.exists(), reason="local iPhone sample not present")
 def test_real_iphone_heic(tmp_path):
-    r = images.process(str(SAMPLE_HEIC), str(tmp_path / "out"), jpeg=True)
+    r = images.process(str(SAMPLE_HEIC), str(tmp_path / "out"))
     assert r["width"] > 0 and r["captured_at"]
-    assert set(r["files"]) == {"view", "thumb", "jpeg"}
+    assert set(r["files"]) == {"view", "thumb"}
 
 
 def test_cli_prints_json(tmp_path):

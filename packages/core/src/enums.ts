@@ -22,7 +22,7 @@ export const JOB_OUTCOMES = ['ok', 'needs_review'] as const;
 export const RENDITION_KINDS = [
   'image_view',
   'image_thumb',
-  'image_jpeg',
+  'image_jpeg', // no longer made (originals are the download); kept for the DB CHECK and old rows
   'video_poster',
   'video_thumb',
   'hls_master',
