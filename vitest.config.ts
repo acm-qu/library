@@ -7,5 +7,8 @@ export default defineConfig({
     globalSetup: ['scripts/test/global-setup.ts'],
     // Integration tests share one database; run files one at a time.
     fileParallelism: false,
+    // ffmpeg encodes and per-test truncates on the docker database often pass 5 s / 10 s on a laptop.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
