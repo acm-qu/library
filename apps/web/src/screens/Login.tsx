@@ -13,6 +13,8 @@ import { OtpInput } from '../ui/OtpInput.tsx';
 import { Rich } from '../ui/Rich.tsx';
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+/** Accounts are ACM core-member addresses; a university address (any qu.edu.qa domain) never has one. */
+const QU_EMAIL_RE = /@([a-z0-9-]+\.)*qu\.edu\.qa$/i;
 const RESEND_SECONDS = 60;
 type CodeError = { kind: 'wrong'; left: number } | { kind: 'expired' } | { kind: 'locked' } | { kind: 'network' } | null;
 
@@ -23,7 +25,7 @@ export function LoginScreen() {
   const next = safeNext(params.get('next'));
   const [step, setStep] = useState<'email' | 'code' | 'done' | 'request'>('email');
   const [email, setEmail] = useState('');
-  const [emailError, setEmailError] = useState<'invalid' | 'network' | null>(null);
+  const [emailError, setEmailError] = useState<'invalid' | 'quEmail' | 'network' | null>(null);
   const [rateUntil, setRateUntil] = useState<number | null>(null);
   const [code, setCode] = useState('');
   const [codeError, setCodeError] = useState<CodeError>(null);
@@ -51,6 +53,7 @@ export function LoginScreen() {
   async function send() {
     const v = email.trim().toLowerCase();
     if (!EMAIL_RE.test(v)) return setEmailError('invalid');
+    if (QU_EMAIL_RE.test(v)) return setEmailError('quEmail');
     setEmailError(null);
     try {
       await request.mutateAsync(v);
@@ -146,13 +149,13 @@ export function LoginScreen() {
                       placeholder={t('login.emailPlaceholder')}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      aria-invalid={emailError === 'invalid' || undefined}
+                      aria-invalid={emailError === 'invalid' || emailError === 'quEmail' || undefined}
                       aria-describedby={emailError ? 'email-msg' : undefined}
                     />
                     {emailError && (
                       <span className="err" id="email-msg" role="alert">
                         <Icon name="alert" size="sm" style={{ marginTop: 3 }} />
-                        {t(emailError === 'invalid' ? 'login.invalidEmail' : 'login.network')}
+                        {t(emailError === 'invalid' ? 'login.invalidEmail' : emailError === 'quEmail' ? 'login.quEmail' : 'login.network')}
                       </span>
                     )}
                   </div>
@@ -266,7 +269,7 @@ function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack:
   const { t } = useTranslation();
   const [f, setF] = useState({ email: initialEmail, name: '' });
   const [isFemale, setIsFemale] = useState<boolean | null>(null);
-  const [error, setError] = useState<'invalid' | 'required' | 'rate' | 'network' | null>(null);
+  const [error, setError] = useState<'invalid' | 'quEmail' | 'required' | 'rate' | 'network' | null>(null);
   const [sent, setSent] = useState(false);
   const req = useRequestAccess();
   const back = (
@@ -286,6 +289,7 @@ function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack:
   async function submit() {
     const email = f.email.trim().toLowerCase();
     if (!EMAIL_RE.test(email)) return setError('invalid');
+    if (QU_EMAIL_RE.test(email)) return setError('quEmail');
     if (!f.name.trim() || isFemale === null) return setError('required');
     setError(null);
     try {
@@ -309,7 +313,7 @@ function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack:
       </div>
     );
 
-  const msg = { invalid: 'login.invalidEmail', required: 'login.requestRequired', rate: 'errors.rate_limited', network: 'login.network' } as const;
+  const msg = { invalid: 'login.invalidEmail', quEmail: 'login.quEmail', required: 'login.requestRequired', rate: 'errors.rate_limited', network: 'login.network' } as const;
   return (
     <>
       <div className="stack" style={{ gap: 10 }}>
@@ -330,7 +334,7 @@ function RequestAccess({ initialEmail, onBack }: { initialEmail: string; onBack:
           <label className="label" htmlFor="ra-e">
             {t('login.email')}
           </label>
-          <input className="input" id="ra-e" type="email" dir="ltr" autoComplete="email" spellCheck={false} placeholder={t('login.emailPlaceholder')} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} aria-invalid={error === 'invalid' || undefined} />
+          <input className="input" id="ra-e" type="email" dir="ltr" autoComplete="email" spellCheck={false} placeholder={t('login.emailPlaceholder')} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} aria-invalid={error === 'invalid' || error === 'quEmail' || undefined} />
         </div>
         <div className="field">
           <label className="label" htmlFor="ra-n">

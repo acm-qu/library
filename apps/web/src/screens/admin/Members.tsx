@@ -320,7 +320,7 @@ function AddOne({ onClose }: { onClose: () => void }) {
           <label className="label" htmlFor="ae">
             {t('admin.m_email')}
           </label>
-          <input className="input" id="ae" type="email" dir="ltr" placeholder="name@qu.edu.qa" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} aria-invalid={!!err || undefined} />
+          <input className="input" id="ae" type="email" dir="ltr" placeholder={t('login.emailPlaceholder')} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} aria-invalid={!!err || undefined} />
         </div>
         <div className="field" style={{ flex: '2 1 200px' }}>
           <label className="label" htmlFor="an">
