@@ -9,7 +9,7 @@ import { newId } from '@acm/core/ids';
 import { lutPath, tmpDir } from '@acm/core/paths';
 import { eq } from 'drizzle-orm';
 import { type Ctx, type JobScope, Permanent } from '../context.ts';
-import { baseFilter, classify, hlsArgs, ladder, parseMaster, type ProbeJson } from '../lib/ffmpeg.ts';
+import { baseFilter, classify, hlsArgs, ladder, parseMaster, type ProbeJson, sourceReadrate } from '../lib/ffmpeg.ts';
 import { ChildFailed, mediaworker, run } from '../lib/spawn.ts';
 import { getOrCreateKeys, writeKeyInfo } from '../lib/keys.ts';
 import { sealAll, wantsEncryption } from '../lib/seal.ts';
@@ -70,9 +70,10 @@ export async function processVideo(ctx: Ctx, job: Job, a: Asset, src: string, sc
     // Encode: 10% → 90% of the job's progress bar.
     await scope.step(hdr ? 'Converting HDR and encoding' : 'Encoding', 0.1);
     const encStart = Date.now();
-    const timeoutMs = Math.max(15 * 60_000, c.durationS * 1000 * (hdr ? 8 : 4));
+    const readrate = sourceReadrate((await stat(src)).size, c.durationS);
+    const timeoutMs = Math.max(15 * 60_000, c.durationS * 1000 * ((hdr ? 8 : 4) + 1 / readrate));
     let lastOut = 0;
-    await run(ctx.cfg.FFMPEG, hlsArgs({ src, out: tmp, rungs, vf, fps: c.fps, vfr: c.vfr, hasAudio: c.hasAudio, keyInfo: keyInfo?.info }), {
+    await run(ctx.cfg.FFMPEG, hlsArgs({ src, out: tmp, rungs, vf, fps: c.fps, vfr: c.vfr, hasAudio: c.hasAudio, keyInfo: keyInfo?.info, readrate }), {
       timeoutMs,
       isCancelled: () => scope.isCancelled(),
       onStderr: (l) => (tail = (tail + l + '\n').slice(-4000)),

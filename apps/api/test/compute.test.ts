@@ -18,3 +18,16 @@ describe('compute usage', () => {
     else expect(r.available).toBe(false);
   });
 });
+
+describe('media serving budget', () => {
+  it('paces large responses to the shared rate and leaves small ones alone', async () => {
+    const { Readable } = await import('node:stream');
+    const { servedAs, SERVE_BPS } = await import('../src/media/throttle.ts');
+    const small = Readable.from([Buffer.alloc(1024)]);
+    expect(servedAs(small, 1024)).toBe(small);
+    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SERVE_BPS / 8)); // half a second's worth in total
+    const t0 = Date.now();
+    for await (const _ of servedAs(Readable.from(chunks), SERVE_BPS / 2)) void _;
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(300);
+  });
+});

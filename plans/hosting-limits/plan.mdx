@@ -556,6 +556,8 @@ Automatic selection is now a checkbox in **Admin › Storage** that takes effect
 
 The spawn helpers sample each child's thread count (its whole process group for Python), and `apps/worker/src/runner.ts` logs `peakThreads` in each "job done" line. `deploy/health.sh` mails once when the worker has not checked in for 10 minutes, and once more when it is back. Per-job CPU time is not logged.
 
+**Live compute on Admin › Processing (15ab488).** The page (renamed from "Processing queue") shows the account's threads, CPU and disk IO against the host's limits (200 tasks, 400%, 30 MB/s) with this app's share, measured by `apps/api/src/lib/compute.ts` from `/proc` over 1 s and refreshed every 15 s. It counts every process of the account, as CloudLinux does, so it also shows the other sites' load. The limits are copied from cPanel's Resource Usage page.
+
 ### Step 11: start the worker when an upload finishes (done, 73eecba)
 
 After ingest queues the job, the API calls `wakeWorker` (`apps/api/src/lib/wake.ts`), which runs `WORKER_WAKE` in its own process group, so an API restart never stops an encode. `WORKER_WAKE` (in `shared/.env`, optional in `packages/core/src/config.ts`) is the crontab's worker command with `flock -w 20` instead of `-n`: a running worker picks the job up, and one that is exiting is waited out. Processing now starts about a second after an upload instead of up to a minute later. Cron moves to every 2 minutes (changed by hand in cPanel; `deploy/crontab.template` and `docs/ops.md` updated) and still covers admin actions, retries, crashes and the 50-min deadline. Unset, the library falls back to cron only.

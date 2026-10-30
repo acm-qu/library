@@ -93,8 +93,11 @@ function checkKey(key: Buffer) {
   if (key.length !== KEY_BYTES) throw new TypeError(`file key must be ${KEY_BYTES} bytes`);
 }
 
+/** Called with bytes moved per chunk; the worker passes one to keep under the host's disk IO cap. */
+export type Pace = (bytes: number) => Promise<void>;
+
 /** Encrypt `src` into `dst` (created exclusively). The caller renames `dst` into place. */
-export async function sealFile(src: string, dst: string, key: Buffer, assetId: string, chunkSize = DEFAULT_CHUNK): Promise<Header> {
+export async function sealFile(src: string, dst: string, key: Buffer, assetId: string, chunkSize = DEFAULT_CHUNK, pace?: Pace): Promise<Header> {
   checkKey(key);
   const id = uuidBytes(assetId);
   const input = await open(src, 'r');
@@ -112,6 +115,7 @@ export async function sealFile(src: string, dst: string, key: Buffer, assetId: s
       const { bytesRead } = await input.read(buf, 0, want, i * chunkSize);
       if (bytesRead !== want) throw new AeadFileError('source changed while sealing');
       await output.write(sealChunk(buf.subarray(0, want), key, h, id, i, i === n - 1));
+      await pace?.(2 * want);
     }
     await output.sync();
     return h;
@@ -164,10 +168,13 @@ export async function* openRange(path: string, key: Buffer, assetId: string, sta
 }
 
 /** Decrypt a whole ACMENC01 file to `dst` (created exclusively, mode 600). Used for re-processing and retiering. */
-export async function openFileTo(src: string, dst: string, key: Buffer, assetId: string): Promise<void> {
+export async function openFileTo(src: string, dst: string, key: Buffer, assetId: string, pace?: Pace): Promise<void> {
   const out = await open(dst, 'wx', 0o600);
   try {
-    for await (const part of openRange(src, key, assetId)) await out.write(part);
+    for await (const part of openRange(src, key, assetId)) {
+      await out.write(part);
+      await pace?.(2 * part.length);
+    }
     await out.sync();
   } finally {
     await out.close();

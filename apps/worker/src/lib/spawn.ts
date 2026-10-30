@@ -8,10 +8,18 @@ import path from 'node:path';
 export const THREAD_ENV = { OMP_NUM_THREADS: '2', OPENBLAS_NUM_THREADS: '1', MKL_NUM_THREADS: '1', NUMEXPR_NUM_THREADS: '1', VECLIB_MAXIMUM_THREADS: '1' };
 
 /** `ionice -c3` (idle IO class) when the host has it, so encodes never starve the API's disk reads. Resolved once. */
-const IONICE = ['/usr/bin', ...(process.env.PATH ?? '').split(path.delimiter).filter((d) => path.isAbsolute(d))].map((d) => path.join(d, 'ionice')).find((f) => existsSync(f)) ?? null;
-const wrap = (cmd: string, args: string[]): [string, string[]] => (IONICE ? [IONICE, ['-c3', cmd, ...args]] : [cmd, args]);
+const findTool = (name: string) =>
+  ['/usr/bin', ...(process.env.PATH ?? '').split(path.delimiter).filter((d) => path.isAbsolute(d))].map((d) => path.join(d, name)).find((f) => existsSync(f)) ?? null;
+const IONICE = findTool('ionice');
+/** The account's CPU quota is 4 cores; children are pinned to 3 so the website always has the 4th, whatever they spawn. */
+export const WORKER_CPUS = '0-2';
+const TASKSET = findTool('taskset');
+const wrap = (cmd: string, args: string[]): [string, string[]] => {
+  const pre = [...(IONICE ? [IONICE, '-c3'] : []), ...(TASKSET ? [TASKSET, '-c', WORKER_CPUS] : [])];
+  return pre.length ? [pre[0]!, [...pre.slice(1), cmd, ...args]] : [cmd, args];
+};
 // ionice could not exec the command (126/127): the same as spawn failing.
-const execFailed = (code: number | null) => !!IONICE && (code === 126 || code === 127);
+const execFailed = (code: number | null) => !!(IONICE || TASKSET) && (code === 126 || code === 127);
 
 function lowerPriority(pid: number | undefined) {
   try {

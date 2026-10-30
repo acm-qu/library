@@ -106,6 +106,18 @@ export function baseFilter(hdr: 'sdr' | 'hlg' | 'pq', lut?: string): string {
 
 const scaleFor = (h: number) => `scale=w='if(gte(iw,ih),-2,${h})':h='if(gte(iw,ih),${h},-2)'`;
 
+/** The encode reads its source at most this fast (bytes/s): part of the account's 30 MB/s disk budget. */
+export const SOURCE_READ_BPS = 8 * 2 ** 20;
+
+/**
+ * ffmpeg's -readrate (a multiple of real time) that keeps reading under SOURCE_READ_BPS for a file of `bytes`
+ * lasting `durationS`. Floored at 0.25× so a very high-bitrate source still finishes; capped at 20× for tiny files.
+ */
+export function sourceReadrate(bytes: number, durationS: number) {
+  if (!(bytes > 0) || !(durationS > 0)) return 1;
+  return Math.min(20, Math.max(0.25, SOURCE_READ_BPS / (bytes / durationS)));
+}
+
 export function hlsArgs(o: {
   src: string;
   out: string; // directory that receives hls/
@@ -115,6 +127,8 @@ export function hlsArgs(o: {
   vfr: boolean;
   hasAudio: boolean;
   keyInfo?: string;
+  /** Input speed as a multiple of real time, so the source is read no faster than the disk budget allows. */
+  readrate?: number;
 }): string[] {
   const n = o.rungs.length;
   const fps = Math.round(o.fps) || 30;
@@ -122,7 +136,7 @@ export function hlsArgs(o: {
   const split = n > 1 ? `,split=${n}${o.rungs.map((_, i) => `[s${i}]`).join('')}` : '[s0]';
   const fc = `[0:v]${o.vf}${split};${o.rungs.map((r, i) => `[s${i}]${scaleFor(r.h)}[v${i}]`).join(';')}`;
   // One thread each for decode, filters and every x264 rung (3 rungs ≈ 3 cores), so the API keeps the 4th core.
-  const args = ['-nostdin', '-hide_banner', '-y', '-filter_threads', '1', '-filter_complex_threads', '1', '-threads', '1', '-i', o.src, '-filter_complex', fc];
+  const args = ['-nostdin', '-hide_banner', '-y', '-filter_threads', '1', '-filter_complex_threads', '1', '-threads', '1', ...(o.readrate ? ['-readrate', o.readrate.toFixed(2)] : []), '-i', o.src, '-filter_complex', fc];
   o.rungs.forEach((_, i) => {
     args.push('-map', `[v${i}]`);
     if (o.hasAudio) args.push('-map', '0:a:0');

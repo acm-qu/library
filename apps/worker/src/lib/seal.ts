@@ -7,6 +7,7 @@ import { originalPath, tmpDir } from '@acm/core/paths';
 import { eq } from 'drizzle-orm';
 import type { Ctx } from '../context.ts';
 import { deleteKeys, getKeys, getOrCreateKeys } from './keys.ts';
+import { pacer } from './pace.ts';
 
 export const wantsEncryption = (a: Pick<Asset, 'tier'>) => a.tier === 'core';
 
@@ -15,7 +16,7 @@ export async function sealAll(dir: string, files: string[], fileKey: Buffer, ass
   const out: string[] = [];
   for (const f of files) {
     const plain = path.join(dir, f);
-    await sealFile(plain, `${plain}.enc`, fileKey, assetId);
+    await sealFile(plain, `${plain}.enc`, fileKey, assetId, undefined, pacer());
     await rm(plain);
     out.push(`${f}.enc`);
   }
@@ -32,7 +33,7 @@ export async function plainOriginal(ctx: Ctx, a: Asset, jobId: string): Promise<
   if (!keys) throw new Error('encrypted original without keys');
   const dst = path.join(tmpDir(ctx.cfg.MEDIA_ROOT, jobId), `src.${a.originalExt}`);
   await rm(dst, { force: true });
-  await openFileTo(originalPath(ctx.cfg.MEDIA_ROOT, a.id, a.originalExt, true), dst, keys.fileKey, a.id);
+  await openFileTo(originalPath(ctx.cfg.MEDIA_ROOT, a.id, a.originalExt, true), dst, keys.fileKey, a.id, pacer());
   return dst;
 }
 
@@ -45,7 +46,7 @@ export async function reconcileOriginal(ctx: Ctx, assetId: string) {
   if (wantsEncryption(a) && !a.encrypted) {
     const keys = await getOrCreateKeys(ctx, a.id);
     await rm(`${sealed}.part`, { force: true });
-    await sealFile(plain, `${sealed}.part`, keys.fileKey, a.id);
+    await sealFile(plain, `${sealed}.part`, keys.fileKey, a.id, undefined, pacer());
     await rename(`${sealed}.part`, sealed);
     await ctx.db.update(assets).set({ encrypted: true }).where(eq(assets.id, a.id));
     await rm(plain);
@@ -53,7 +54,7 @@ export async function reconcileOriginal(ctx: Ctx, assetId: string) {
     const keys = await getKeys(ctx, a.id);
     if (!keys) throw new Error('encrypted original without keys');
     await rm(`${plain}.part`, { force: true });
-    await openFileTo(sealed, `${plain}.part`, keys.fileKey, a.id);
+    await openFileTo(sealed, `${plain}.part`, keys.fileKey, a.id, pacer());
     await rename(`${plain}.part`, plain);
     await ctx.db.update(assets).set({ encrypted: false }).where(eq(assets.id, a.id));
     await rm(sealed);

@@ -24,7 +24,8 @@ sha=$(cat dist/release/RELEASE)
 case "$sha" in *dirty*) [ "${ALLOW_DIRTY:-}" = 1 ] || { echo "refusing to deploy a dirty tree ($sha); commit first or set ALLOW_DIRTY=1" >&2; exit 1; };; esac
 
 echo "→ uploading $sha"
-rsync -az --delete --exclude node_modules -e "ssh -i $KEY" dist/release/ "$HOST:$BASE/releases/$sha/"
+# 8 MB/s: the copy lands on the account's 30 MB/s disk budget while the live site keeps running.
+rsync -az --bwlimit=8000 --delete --exclude node_modules -e "ssh -i $KEY" dist/release/ "$HOST:$BASE/releases/$sha/"
 ssh_ bash -s <<REMOTE
 set -euo pipefail
 cd $BASE/releases/$sha

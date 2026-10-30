@@ -22,6 +22,8 @@ export type Item = {
 };
 
 const CHUNK = 8 * 1024 * 1024;
+/** Per file. The server's disk IO is capped at 30 MB/s for everything; two uploads at this rate use at most a third. */
+export const UPLOAD_BPS = 5 * 1024 * 1024;
 const PARALLEL = 2;
 const RETRY = [0, 1000, 3000, 5000, 10_000, 20_000, 30_000];
 
@@ -49,12 +51,29 @@ function reasonOf(err: unknown): FailReason {
   return 'network';
 }
 
+/** Waits so chunk requests start at most one per CHUNK / UPLOAD_BPS seconds (1.6 s for 8 MiB at 5 MiB/s). */
+export function chunkPacer(now = () => Date.now()) {
+  let nextAt = 0;
+  return (): number => {
+    const t = now();
+    const wait = Math.max(0, nextAt - t);
+    nextAt = Math.max(t, nextAt) + (CHUNK / UPLOAD_BPS) * 1000;
+    return wait;
+  };
+}
+
 function startOne(it: Item) {
+  const nextWait = chunkPacer();
   const up = new tus.Upload(it.file, {
     endpoint: '/api/uploads',
     chunkSize: CHUNK,
     retryDelays: RETRY,
     headers: { 'X-Requested-With': 'acm-media' },
+    onBeforeRequest: (req) => {
+      if (req.getMethod() !== 'PATCH') return;
+      const wait = nextWait();
+      return wait ? new Promise((r) => setTimeout(r, wait)) : undefined;
+    },
     metadata: { eventId: it.eventId, tier: it.tier, filename: it.file.name, filetype: it.file.type },
     storeFingerprintForResuming: true,
     removeFingerprintOnSuccess: true,

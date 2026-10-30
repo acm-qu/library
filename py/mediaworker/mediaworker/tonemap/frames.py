@@ -7,6 +7,7 @@ lut3d sees them, so the candidates can be computed from the same numbers the tab
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -100,11 +101,22 @@ def extract(ffmpeg: str, src: str, t: float, size: tuple[int, int], kind: str, t
     return frames[0]
 
 
+SOURCE_READ_BPS = 8 * 2**20  # the worker's share of the account's 30 MB/s disk budget (same as the encode)
+
+
+def readrate(src: str, duration: float) -> list[str]:
+    """ffmpeg -readrate so a whole-file scan reads no faster than SOURCE_READ_BPS (0.25x to 20x real time)."""
+    size = os.path.getsize(src)
+    if size <= 0 or duration <= 0:
+        return []
+    return ["-readrate", f"{min(20.0, max(0.25, SOURCE_READ_BPS / (size / duration))):.2f}"]
+
+
 def proxy_scan(ffmpeg: str, src: str, p: Probe, kind: str, long_edge: int = 160, timeout: float = 1800) -> list[Proxy]:
     """Every keyframe at a small size (about one per second on phones): brightness and uniformity per frame."""
     size = fit(p.width, p.height, long_edge)
     proc = subprocess.run(
-        [ffmpeg, "-nostdin", "-hide_banner", "-v", "info", *THREADS, "-skip_frame", "nokey", "-i", src,
+        [ffmpeg, "-nostdin", "-hide_banner", "-v", "info", *THREADS, "-skip_frame", "nokey", *readrate(src, p.duration), "-i", src,
          "-an", "-sn", "-dn", "-fps_mode", "passthrough", "-vf", f"showinfo,{_vf(size, kind)}", "-threads", "1", "-f", "rawvideo", "-"],
         capture_output=True, check=True, timeout=timeout,
     )
