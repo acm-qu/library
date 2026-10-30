@@ -610,7 +610,7 @@ The account's limits are shared by every site on it, so each step gets a fixed s
   id="budget"
   columns={["Step", "CPU (limit 400%)", "Disk IO (limit 30 MB/s)", "How it is enforced"]}
   rows={[
-    ["Upload (all tus PATCH bodies together)", "API, light", "≤ 5 MiB/s total, server-enforced", "apps/api/src/media/throttle.ts takeUpload, applied in a FileStore subclass in apps/api/src/routes/uploads.ts; the browser's chunkPacer (apps/web/src/lib/uploader.ts) stays as a courtesy"],
+    ["Upload (all tus PATCH bodies together)", "API, light", "live: whatever the 21 MiB/s line leaves (2–21 MiB/s), all uploaders split it; server-enforced", "apps/api/src/media/throttle.ts takeUpload, applied in a FileStore subclass in apps/api/src/routes/uploads.ts; the browser's chunkPacer (apps/web/src/lib/uploader.ts) stays as a courtesy"],
     ["Hash, seal, unseal, re-tier", "worker, light", "≤ 8 MiB/s", "apps/worker/src/lib/pace.ts (pacer) in hash.ts, seal.ts and retier.ts; packages/core/src/crypto/aeadFile.ts takes an optional pace hook"],
     ["Encode (HLS ladder) and keyframe scan", "≤ 200% (pinned to CPUs 2-3)", "source read ≤ 5 MiB/s; at most 2.5× real time, so HLS writes ≈ 3 MB/s", "taskset -c 2-3 in apps/worker/src/lib/spawn.ts; ffmpeg -readrate from sourceReadrate() and frames.readrate() (0.05× to 2.5× / 20×); HDR tone-mapping runs after the downscale to the top rung"],
     ["Serving: large files (> 1 MiB: originals, HLS data.ts)", "API, light", "≤ 5 MiB/s for all viewers together", "throttle.ts: classed by the whole file's size, so Range slices (HLS segments) are paced too; at most 32 held responses, then 429 with Retry-After 5 (hls.js retries fragments on 429)"],
@@ -620,13 +620,16 @@ The account's limits are shared by every site on it, so each step gets a fixed s
 />
 
 ```latex
-\text{IO}_{\max} = \underbrace{5}_{\text{uploads}} + \underbrace{8}_{\text{worker}} + \underbrace{5 + 3}_{\text{serving}} = 21\ \text{MiB/s} \approx 70\%\ \text{of}\ 30\ \text{MiB/s}
+\text{upload}_{\text{bps}} = \operatorname{clamp}\big(21 - (\text{account IO} - \text{upload IO}),\ 2,\ 21\big)\ \text{MiB/s}
+\qquad
+\text{IO}_{\max} = \underbrace{8}_{\text{worker}} + \underbrace{5 + 3}_{\text{serving}} + \underbrace{\geq 5}_{\text{uploads fill the rest}} = 21\ \text{MiB/s} \approx 70\%\ \text{of}\ 30\ \text{MiB/s}
 \qquad
 \text{CPU}_{\max} \approx \underbrace{200\%}_{\text{worker}} + \underbrace{50\%}_{\text{API}} \approx 250\% \approx 64\%\ \text{of}\ 400\%
 ```
 
 The hash/seal step and the encode never run at the same time (the worker does one step after another), so the worker's share is the larger of the two, 8 MiB/s. The IO total is 70% if the host's MB/s means MiB/s, as LVE's KB/s settings suggest, and 73% (22 MB/s) if it means `10^6` bytes. Other limits:
 
+- **Dynamic upload rate:** `apps/api/src/media/throttle.ts` samples the whole account's disk IO from `/proc` once a second while uploads flow (`accountIoSince` in `apps/api/src/lib/compute.ts`) and gives uploads `21 MiB/s` minus everything else (encodes, serving, the other sites), never below 2 or above 21; before the first sample and off Linux it uses 5 MiB/s, and the sampler stops after 10 quiet seconds. A lone uploader on a quiet account gets the full 21 MiB/s; three uploaders split it. The browser's per-file cap is 21 MiB/s so it never holds a lone uploader back.
 - **Entry processes (150):** at most 32 paced large responses are held at once (`MAX_PACED`); the 33rd gets a 429 before any header is sent. Paced streams buffer one chunk, not 16, so a slow client holds little memory.
 - **Processes (200):** the API keeps at most one `WORKER_WAKE` waiter alive (apps/api/src/lib/wake.ts), so a batch of uploads no longer starts one 20-second `flock` per file. Torch uses one inter-op thread (`set_num_interop_threads(1)`).
 - **Memory (4 GB):** Pillow refuses images over 120 MP (`MAX_IMAGE_PIXELS = 60_000_000`, which Pillow enforces at 2×), so one decode stays around 1.1-1.4 GB. HDR tone-mapping now works on frames of at most 1080p instead of full 4K float RGB.

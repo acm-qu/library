@@ -73,3 +73,15 @@ describe('worker wake', () => {
     expect(existsSync(`${dir}/ran`)).toBe(true);
   });
 });
+
+describe('live upload rate', () => {
+  it('gives uploads what the 70% line leaves, between 2 and 21 MiB/s', async () => {
+    const { uploadRate, IO_TARGET_BPS, UPLOAD_FLOOR_BPS, UPLOAD_START_BPS } = await import('../src/media/throttle.ts');
+    const MiB = 2 ** 20;
+    expect(uploadRate(null, 0)).toBe(UPLOAD_START_BPS); // nothing measured yet
+    expect(uploadRate(0, 0)).toBe(IO_TARGET_BPS); // a quiet account: uploads get the whole 21
+    expect(uploadRate(21 * MiB, 21 * MiB)).toBe(IO_TARGET_BPS); // only uploads are writing: keep the full rate
+    expect(uploadRate(13 * MiB, 3 * MiB)).toBe(11 * MiB); // 10 MiB/s of encoding and serving leaves 11
+    expect(uploadRate(40 * MiB, 0)).toBe(UPLOAD_FLOOR_BPS); // the account is already busy: the floor
+  });
+});

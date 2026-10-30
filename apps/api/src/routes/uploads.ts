@@ -39,7 +39,7 @@ function setInternalHeader(raw: FastifyRequest['raw'], name: string, value: stri
   raw.headers[name] = value;
 }
 
-/** Every PATCH body together is written at most UPLOAD_BPS, whatever the client does (the browser paces too). */
+/** Every PATCH body together is written at the live upload rate (2–21 MiB/s, see uploadRate), whatever the client does. */
 class PacedFileStore extends FileStore {
   override write(readable: Parameters<FileStore['write']>[0], id: string, offset: number) {
     return super.write(Readable.from(paced(readable, takeUpload), { highWaterMark: 1 }), id, offset);

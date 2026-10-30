@@ -23,8 +23,8 @@ export type Item = {
 };
 
 const CHUNK = 8 * 1024 * 1024;
-/** Per file. The API also caps all uploads together at 5 MiB/s (media/throttle.ts); this keeps a single client polite. */
-export const UPLOAD_BPS = 5 * 1024 * 1024;
+/** Per file, the most the server ever gives uploads (media/throttle.ts sizes the real, shared rate live: 2–21 MiB/s). */
+export const UPLOAD_BPS = 21 * 1024 * 1024;
 const PARALLEL = 2;
 const RETRY = [0, 1000, 3000, 5000, 10_000, 20_000, 30_000];
 
@@ -52,7 +52,7 @@ function reasonOf(err: unknown): FailReason {
   return 'network';
 }
 
-/** Waits so chunk requests start at most one per CHUNK / UPLOAD_BPS seconds (1.6 s for 8 MiB at 5 MiB/s). */
+/** Waits so chunk requests start at most one per CHUNK / UPLOAD_BPS seconds (about 0.4 s for 8 MiB at 21 MiB/s). */
 export function chunkPacer(now = () => Date.now()) {
   let nextAt = 0;
   return (): number => {

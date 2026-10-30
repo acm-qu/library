@@ -40,6 +40,25 @@ async function snapshot(uid: number) {
   return out;
 }
 
+let lastIo: { at: number; io: Map<string, number> } | null = null;
+
+/** Disk bytes/s of every process of this account since the previous call; null on the first call or off Linux. */
+export async function accountIoSince(): Promise<number | null> {
+  const uid = process.getuid?.();
+  if (process.platform !== 'linux' || uid === undefined) return null;
+  const snap = await snapshot(uid);
+  const now = Date.now();
+  const prev = lastIo;
+  lastIo = { at: now, io: new Map([...snap].map(([pid, p]) => [pid, p.io])) };
+  if (!prev || now <= prev.at) return null;
+  let bytes = 0;
+  for (const [pid, p] of snap) {
+    const before = prev.io.get(pid);
+    if (before !== undefined) bytes += Math.max(0, p.io - before);
+  }
+  return bytes / ((now - prev.at) / 1000);
+}
+
 const zero = { threads: 0, cpuPct: 0, ioBps: 0 };
 
 /** Two snapshots `sampleMs` apart: threads now, CPU % (100 = one core) and disk bytes/s over the gap. */
