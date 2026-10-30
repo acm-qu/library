@@ -9,6 +9,7 @@ import { MyUploadsScreen } from '../screens/MyUploads.tsx';
 import { NotFound } from '../screens/States.tsx';
 import { UploadScreen } from '../screens/Upload.tsx';
 import { ItemScreen } from '../screens/admin/Item.tsx';
+import { EventsScreen } from '../screens/admin/Events.tsx';
 import { AdminLayout } from '../screens/admin/Layout.tsx';
 import { MembersScreen } from '../screens/admin/Members.tsx';
 import { QueueScreen } from '../screens/admin/Queue.tsx';
@@ -37,6 +38,7 @@ export const screenRoutes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/admin/queue" replace /> },
       { path: 'members', element: <MembersScreen /> },
+      { path: 'events', element: <EventsScreen /> },
       { path: 'queue', element: <QueueScreen /> },
       { path: 'items/:assetId', element: <ItemScreen /> },
       { path: 'storage', element: <StorageScreen /> },

@@ -56,7 +56,6 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
       .where(
         and(
           q.q ? or(ilike(users.email, `%${q.q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`), ilike(users.name, `%${q.q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`)) : undefined,
-          q.role ? eq(users.role, q.role) : undefined,
           q.status ? eq(users.status, q.status) : undefined,
           cur ? sql`(${users.createdAt}, ${users.id}) < (${cur.c}::timestamptz, ${cur.i}::uuid)` : undefined,
         ),
@@ -83,20 +82,19 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
   app.post('/api/admin/users', { preHandler: requireAdmin }, async (req, reply) => {
     const v = viewerOf(req);
     const body = CreateUserBody.parse(req.body);
-    if (body.isAdmin && body.role !== 'core') throw new HttpError('bad_request', { fields: { isAdmin: 'admins_must_be_core' } });
     const [exists] = await db.select({ id: users.id }).from(users).where(eq(users.email, body.email));
     if (exists) throw new HttpError('conflict', { fields: { email: 'exists' } }, 'Someone with that email is already a member.');
     const id = newId();
     await db.transaction(async (tx) => {
-      await tx.insert(users).values({ id, ...body, createdBy: v.id });
-      await audit(tx, v.id, 'user.create', { type: 'user', id }, { email: body.email, role: body.role, isAdmin: body.isAdmin });
+      await tx.insert(users).values({ id, ...body, role: 'core', createdBy: v.id });
+      await audit(tx, v.id, 'user.create', { type: 'user', id }, { email: body.email, isAdmin: body.isAdmin });
     });
     return reply.code(201).send({ id });
   });
 
   app.post('/api/admin/users/bulk', { preHandler: requireAdmin }, async (req) => {
     const v = viewerOf(req);
-    const { emails, role } = BulkUsersBody.parse(req.body);
+    const { emails, isAdmin } = BulkUsersBody.parse(req.body);
     const skipped: { email: string; reason: 'invalid' | 'exists' | 'duplicate' }[] = [];
     const valid: string[] = [];
     const seen = new Set<string>();
@@ -114,8 +112,8 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
     for (const e of valid) if (existing.has(e)) skipped.push({ email: e, reason: 'exists' });
     if (fresh.length) {
       await db.transaction(async (tx) => {
-        await tx.insert(users).values(fresh.map((email) => ({ id: newId(), email, role, createdBy: v.id })));
-        await audit(tx, v.id, 'user.bulk_create', { type: 'user', id: v.id }, { count: fresh.length, role });
+        await tx.insert(users).values(fresh.map((email) => ({ id: newId(), email, role: 'core' as const, isAdmin, createdBy: v.id })));
+        await audit(tx, v.id, 'user.bulk_create', { type: 'user', id: v.id }, { count: fresh.length, isAdmin });
       });
     }
     return { created: fresh.length, skipped };
@@ -130,12 +128,9 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
       await tx.execute(sql`select id from ${users} where ${users.isAdmin} for update`);
       const [u] = await tx.select().from(users).where(eq(users.id, id)).for('update');
       if (!u) return notFound();
-      const role = body.role ?? u.role;
-      let isAdmin = body.isAdmin ?? u.isAdmin;
-      if (role === 'member') {
-        if (body.isAdmin === true) return new HttpError('bad_request', { fields: { isAdmin: 'admins_must_be_core' } });
-        isAdmin = false; // demoting a core admin to member clears admin in the same statement
-      }
+      // Every account is core; an old member row becomes core when it's edited, so the admin flag is always valid.
+      const role = 'core' as const;
+      const isAdmin = body.isAdmin ?? u.isAdmin;
       const status = body.status ?? u.status;
       const wasActiveAdmin = u.isAdmin && u.status === 'active';
       const staysActiveAdmin = isAdmin && status === 'active';

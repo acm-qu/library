@@ -74,6 +74,8 @@
 .app .btn-p:active{background:var(--primary-press)}
 .app .btn-s{background:var(--surface);border-color:var(--border-strong);color:var(--text);font-weight:500}
 .app .btn-s:hover{background:var(--surface-2)}
+.app .btn-ok{background:transparent;border-color:var(--ok);color:var(--ok);font-weight:500}
+.app .btn-ok:hover{background:var(--ok-bg)}
 .app .btn-g{color:var(--text-2);font-weight:500;padding:0 12px}
 .app .btn-g:hover{background:var(--surface-2);color:var(--text)}
 .app .btn-d{background:var(--surface);border-color:var(--border-strong);color:var(--danger);font-weight:500}

@@ -1,7 +1,7 @@
 // Event page: cover, header, kind and tier filters, justified grid with status tiles.
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client.ts';
 import { useEvent, useEventAssets } from '../data/library.ts';
 import { useMe } from '../data/session.ts';
@@ -10,6 +10,7 @@ import { Icon } from '../ui/Icon.tsx';
 import { GridSkeleton, JustifiedGrid } from '../ui/JustifiedGrid.tsx';
 import { MediaTile } from '../ui/MediaTile.tsx';
 import { fadeIn, Skeleton } from '../ui/Skeleton.tsx';
+import { EventEditDialog } from './EventEdit.tsx';
 import { NotFound, ServerError } from './States.tsx';
 
 type Kind = 'image' | 'video' | undefined;
@@ -24,6 +25,8 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
   const kind = (['image', 'video'].includes(params.get('kind') ?? '') ? params.get('kind') : undefined) as Kind;
   const tier = (isCore && ['member', 'core'].includes(params.get('tier') ?? '') ? params.get('tier') : undefined) as Tier;
   const ev = useEvent(slug);
+  const [editing, setEditing] = useState(false);
+  const navigate = useNavigate();
   const assets = useEventAssets(ev.data?.id, { kind, tier });
   const items = useMemo(() => assets.data?.pages.flatMap((p) => p.items) ?? [], [assets.data]);
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = assets;
@@ -98,6 +101,10 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
           </div>
           {isCore && (
             <div className="row" style={{ gap: 8 }}>
+              <button className="btn btn-s" onClick={() => setEditing(true)}>
+                <Icon name="edit" />
+                {t('event.edit')}
+              </button>
               <Link className="btn btn-p" to={`/upload?event=${e.id}`}>
                 <Icon name="plus" />
                 {t('event.addMedia')}
@@ -158,6 +165,7 @@ export function EventScreen({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         )}
       </main>
+      {editing && <EventEditDialog slug={e.slug} onClose={() => setEditing(false)} onDeleted={() => navigate('/', { replace: true })} />}
     </>
   );
 }

@@ -39,7 +39,7 @@ let eventId: string;
 beforeEach(async () => {
   const c = await addUser('c@qu.edu.qa', { role: 'core' });
   core = { id: c.id, sid: (await createSession(db, c.id, { ip: null, userAgent: null })).token };
-  const m = await addUser('m@qu.edu.qa');
+  const m = await addUser('m@qu.edu.qa', { role: 'member' });
   member = (await createSession(db, m.id, { ip: null, userAgent: null })).token;
   eventId = newId();
   await db.insert(events).values({ id: eventId, title: 'E', slug: 'e', startsOn: '2026-10-10', createdBy: c.id });

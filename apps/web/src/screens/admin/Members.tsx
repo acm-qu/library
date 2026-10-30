@@ -1,4 +1,5 @@
-// Admin · Members: list with search and filters, add one, paste a list, role/admin/status with confirmations.
+// Admin · Members: list with search and filters, add one, paste a list, admin/status with confirmations.
+// Every account is core; admin is the only difference (signed-out visitors already see everything public).
 import type { AdminUser } from '@acm/core/schemas';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,14 +15,16 @@ import { Rich } from '../../ui/Rich.tsx';
 import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-type Pending = { kind: 'member' | 'disable'; user: AdminUser } | null;
+type Pending = { kind: 'disable'; user: AdminUser } | null;
+/** Spreadsheet with an Email column; paste the column into the list below. */
+const TEMPLATE = '/members-template.xlsx';
 
 export function MembersScreen() {
   const { t } = useTranslation();
   const me = useMe().data!;
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
-  const [role, setRole] = useState<'all' | 'member' | 'core' | 'admin'>('all');
+  const [role, setRole] = useState<'all' | 'core' | 'admin'>('all');
   const [disabledOnly, setDisabledOnly] = useState(false);
   const [panel, setPanel] = useState<'none' | 'single' | 'bulk'>('none');
   const [pending, setPending] = useState<Pending>(null);
@@ -33,8 +36,8 @@ export function MembersScreen() {
   useEffect(() => {
     document.title = `${t('admin.members')} · ${t('brand')}`;
   }, [t]);
-  const users = useUsers({ q: debounced || undefined, role: role === 'member' || role === 'core' ? role : undefined, status: disabledOnly ? 'disabled' : undefined });
-  const all = useMemo(() => (users.data?.pages.flatMap((p) => p.items) ?? []).filter((u) => role !== 'admin' || u.isAdmin), [users.data, role]);
+  const users = useUsers({ q: debounced || undefined, status: disabledOnly ? 'disabled' : undefined });
+  const all = useMemo(() => (users.data?.pages.flatMap((p) => p.items) ?? []).filter((u) => role === 'all' || u.isAdmin === (role === 'admin')), [users.data, role]);
   const counts = users.data?.pages[0]?.counts;
   const patch = useAdminMutation((id: string, b: Parameters<typeof api.patchUser>[1]) => api.patchUser(id, b));
   const change = async (u: AdminUser, b: Parameters<typeof api.patchUser>[1]) => {
@@ -72,9 +75,9 @@ export function MembersScreen() {
           <Icon name="search" />
           <input type="search" placeholder={t('admin.m_search')} aria-label={t('admin.m_search')} value={search} onChange={(e) => setSearch(e.target.value)} />
         </label>
-        {(['all', 'member', 'core', 'admin'] as const).map((r) => (
+        {(['all', 'core', 'admin'] as const).map((r) => (
           <button key={r} className="chip" aria-pressed={role === r} onClick={() => setRole(r)}>
-            {t(r === 'all' ? 'admin.m_allRoles' : r === 'member' ? 'admin.m_members' : r === 'core' ? 'admin.m_core' : 'admin.m_admins')}
+            {t(r === 'all' ? 'admin.m_allRoles' : r === 'core' ? 'admin.m_core' : 'admin.m_admins')}
           </button>
         ))}
         <span className="grow" />
@@ -83,11 +86,6 @@ export function MembersScreen() {
         </button>
       </div>
 
-      {pending?.kind === 'member' && (
-        <Confirm title={t('admin.m_confirmMemberTitle', { name: pending.user.name || pending.user.email })} confirm={t('admin.m_makeMember')} cancel={t('admin.m_cancel')} onCancel={() => setPending(null)} onConfirm={() => void change(pending.user, { role: 'member' })} busy={patch.isPending}>
-          {t('admin.m_confirmMemberBody')}
-        </Confirm>
-      )}
       {pending?.kind === 'disable' && (
         <Confirm danger title={t('admin.m_confirmDisableTitle', { name: pending.user.name || pending.user.email })} confirm={t('admin.m_disableAndSignOut')} cancel={t('admin.m_cancel')} onCancel={() => setPending(null)} onConfirm={() => void change(pending.user, { status: 'disabled' })} busy={patch.isPending}>
           <Rich k="admin.m_confirmDisableBody" values={{}} />
@@ -128,15 +126,13 @@ export function MembersScreen() {
                   </div>
                 </td>
                 <td>
-                  {u.role === 'core' ? (
+                  {u.isAdmin ? (
                     <span className="tier">
                       <Icon name="shield" />
-                      {t('admin.m_core')}
+                      {t('admin.m_roleAdmin')}
                     </span>
                   ) : (
-                    <span className="tier" style={{ color: 'var(--text-2)' }}>
-                      {t('admin.m_roleMember')}
-                    </span>
+                    <span className="tier">{t('admin.m_roleCore')}</span>
                   )}
                 </td>
                 <td>
@@ -145,8 +141,8 @@ export function MembersScreen() {
                     aria-checked={u.isAdmin}
                     aria-label={t('admin.m_adminFor', { name: u.name || u.email })}
                     className={`switch${u.isAdmin ? ' on' : ''}`}
-                    style={{ border: 0, cursor: u.role === 'core' ? 'pointer' : 'not-allowed', opacity: u.role === 'core' ? 1 : 0.4 }}
-                    disabled={u.role !== 'core' || patch.isPending}
+                    style={{ border: 0, cursor: 'pointer' }}
+                    disabled={patch.isPending}
                     onClick={() => void change(u, { isAdmin: !u.isAdmin })}
                   />
                 </td>
@@ -154,17 +150,6 @@ export function MembersScreen() {
                 <td className="tnum t-sm muted">{u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : t('admin.m_never')}</td>
                 <td>
                   <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
-                    {u.role === 'member' ? (
-                      <button className="btn btn-g btn-sm" onClick={() => void change(u, { role: 'core' })}>
-                        {t('admin.m_makeCore')}
-                      </button>
-                    ) : (
-                      u.id !== me.id && (
-                        <button className="btn btn-g btn-sm" onClick={() => setPending({ kind: 'member', user: u })}>
-                          {t('admin.m_makeMember')}
-                        </button>
-                      )
-                    )}
                     {u.status === 'active' ? (
                       u.id !== me.id && (
                         <button className="btn btn-g btn-sm" style={{ color: 'var(--danger)' }} onClick={() => setPending({ kind: 'disable', user: u })}>
@@ -194,7 +179,7 @@ export function MembersScreen() {
 
 function AddOne({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
-  const [f, setF] = useState({ email: '', name: '', role: 'member' as 'member' | 'core' });
+  const [f, setF] = useState({ email: '', name: '', isAdmin: false });
   const [err, setErr] = useState<string | null>(null);
   const add = useAdminMutation((b: typeof f) => api.createUser(b));
   const submit = async () => {
@@ -233,9 +218,9 @@ function AddOne({ onClose }: { onClose: () => void }) {
           <label className="label" htmlFor="ar">
             {t('admin.m_role')}
           </label>
-          <select className="input" id="ar" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as 'member' | 'core' })}>
-            <option value="member">{t('admin.m_roleMember')}</option>
+          <select className="input" id="ar" value={f.isAdmin ? 'admin' : 'core'} onChange={(e) => setF({ ...f, isAdmin: e.target.value === 'admin' })}>
             <option value="core">{t('admin.m_roleCore')}</option>
+            <option value="admin">{t('admin.m_roleAdmin')}</option>
           </select>
         </div>
       </div>
@@ -261,7 +246,7 @@ function AddOne({ onClose }: { onClose: () => void }) {
 function AddMany({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
-  const [role, setRole] = useState<'member' | 'core'>('member');
+  const [isAdmin, setIsAdmin] = useState(false);
   const [done, setDone] = useState<number | null>(null);
   const existing = useUsers({}).data?.pages.flatMap((p) => p.items).map((u) => u.email) ?? [];
   const preview = useMemo(() => {
@@ -278,7 +263,7 @@ function AddMany({ onClose }: { onClose: () => void }) {
     }
     return out;
   }, [text, existing]);
-  const bulk = useAdminMutation((emails: string, r: 'member' | 'core') => api.bulkUsers(emails, r));
+  const bulk = useAdminMutation((emails: string, admin: boolean) => api.bulkUsers(emails, admin));
   return (
     <section className="panel stack" aria-labelledby="h-bulk" style={{ gap: 16 }}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -289,12 +274,13 @@ function AddMany({ onClose }: { onClose: () => void }) {
           <Icon name="close" />
         </button>
       </div>
-      <div className="row" style={{ gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        <div className="field" style={{ flex: '2 1 320px' }}>
+      {/* Both columns stretch to the section's height; the list grows to fill the left one. */}
+      <div className="row" style={{ gap: 20, flexWrap: 'wrap', alignItems: 'stretch' }}>
+        <div className="field" style={{ flex: '2 1 320px', display: 'flex', flexDirection: 'column' }}>
           <label className="label" htmlFor="bl">
             {t('admin.m_emails')}
           </label>
-          <textarea className="input tnum" id="bl" rows={8} dir="ltr" value={text} onChange={(e) => setText(e.target.value)} />
+          <textarea className="input tnum" id="bl" rows={8} dir="ltr" value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1, resize: 'vertical' }} />
           <span className="help">{t('admin.m_bulkHelp')}</span>
         </div>
         <div className="stack" style={{ flex: '1 1 240px', gap: 12 }}>
@@ -323,18 +309,23 @@ function AddMany({ onClose }: { onClose: () => void }) {
             <label className="label" htmlFor="br">
               {t('admin.m_addAs')}
             </label>
-            <select className="input" id="br" value={role} onChange={(e) => setRole(e.target.value as 'member' | 'core')}>
-              <option value="member">{t('admin.m_members')}</option>
-              <option value="core">{t('admin.m_core')}</option>
+            <select className="input" id="br" value={isAdmin ? 'admin' : 'core'} onChange={(e) => setIsAdmin(e.target.value === 'admin')}>
+              <option value="core">{t('admin.m_roleCore')}</option>
+              <option value="admin">{t('admin.m_roleAdmin')}</option>
             </select>
           </div>
+          <span className="grow" />
           <button
             className="btn btn-p"
             disabled={!preview.fresh.length || bulk.isPending}
-            onClick={() => void bulk.mutateAsync([text, role]).then((r) => (setDone(r.created), setText('')))}
+            onClick={() => void bulk.mutateAsync([text, isAdmin]).then((r) => (setDone(r.created), setText('')))}
           >
             {t('admin.m_addN', { n: preview.fresh.length })}
           </button>
+          <a className="btn btn-ok" href={TEMPLATE} download>
+            <Icon name="download" />
+            {t('admin.m_template')}
+          </a>
           {done !== null && (
             <span className="st st-ok" role="status">
               <Icon name="check" />

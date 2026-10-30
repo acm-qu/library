@@ -51,7 +51,7 @@ export function useApp(over: Partial<Record<string, string>> = {}) {
 }
 
 export async function addUser(email: string, opts: Partial<typeof users.$inferInsert> = {}) {
-  const [u] = await db.insert(users).values({ id: newId(), email, name: email.split('@')[0]!, ...opts }).returning();
+  const [u] = await db.insert(users).values({ id: newId(), email, name: email.split('@')[0]!, role: 'core', ...opts }).returning();
   return u!;
 }
 

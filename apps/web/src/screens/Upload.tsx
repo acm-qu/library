@@ -9,6 +9,7 @@ import { useCreateEvent, useExisting, useMyUploads } from '../data/uploads.ts';
 import { fmtBytes, fmtDate, readyAt } from '../i18n/format.ts';
 import { fmtEta } from '../lib/eta.ts';
 import { fileKey, type Item, type Tier, uploader, useUploads } from '../lib/uploader.ts';
+import { type EventForm, EventFields, eventBody, FIELD_MSG, invalidFields, TierChoice } from './EventEdit.tsx';
 import { useOnline } from './States.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import { Rich } from '../ui/Rich.tsx';
@@ -91,17 +92,16 @@ function ChooseEvent({ initial, onPick }: { initial?: string; onPick: (id: strin
   const list = (events.data?.pages[0]?.items ?? []).slice(0, 8);
   const [picked, setPicked] = useState<string | undefined>(initial);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ title: '', startsOn: new Date().toISOString().slice(0, 10), endsOn: '', location: '', description: '', defaultTier: 'member' as Tier });
+  const [form, setForm] = useState<EventForm>({ title: '', startsOn: new Date().toISOString().slice(0, 10), endsOn: '', location: '', description: '', defaultTier: 'member' });
   const [error, setError] = useState<string | null>(null);
   const create = useCreateEvent();
 
   async function next() {
     setError(null);
     if (!creating) return picked ? onPick(picked) : setError(t('upload.pickEvent'));
-    if (!form.title.trim()) return setError(t('upload.titleRequired'));
-    if (!form.startsOn) return setError(t('upload.dateRequired'));
-    if (form.endsOn && form.endsOn < form.startsOn) return setError(t('upload.endBeforeStart'));
-    const ev = await create.mutateAsync({ title: form.title.trim(), startsOn: form.startsOn, endsOn: form.endsOn || null, location: form.location.trim() || null, description: form.description.trim() || null, defaultTier: form.defaultTier });
+    const bad = invalidFields(form)[0];
+    if (bad) return setError(t(FIELD_MSG[bad]));
+    const ev = await create.mutateAsync(eventBody(form));
     onPick(ev.id);
   }
 
@@ -149,45 +149,7 @@ function ChooseEvent({ initial, onPick }: { initial?: string; onPick: (id: strin
       {creating && (
         <div className="stack" style={{ gap: 16, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
           <h3 className="t-h3">{t('upload.newEvent')}</h3>
-          <div className="field">
-            <label className="label" htmlFor="ev-t">
-              {t('upload.eventTitle')}
-            </label>
-            <input className="input" id="ev-t" value={form.title} maxLength={200} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          </div>
-          <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
-            <div className="field" style={{ flex: '1 1 200px' }}>
-              <label className="label" htmlFor="ev-d1">
-                {t('upload.date')}
-              </label>
-              <input className="input tnum" id="ev-d1" type="date" value={form.startsOn} onChange={(e) => setForm({ ...form, startsOn: e.target.value })} />
-            </div>
-            <div className="field" style={{ flex: '1 1 200px' }}>
-              <label className="label" htmlFor="ev-d2">
-                {t('upload.endDate')} <span className="subtle">{t('upload.optional')}</span>
-              </label>
-              <input className="input tnum" id="ev-d2" type="date" value={form.endsOn} min={form.startsOn} onChange={(e) => setForm({ ...form, endsOn: e.target.value })} />
-            </div>
-          </div>
-          <div className="field">
-            <label className="label" htmlFor="ev-loc">
-              {t('upload.location')} <span className="subtle">{t('upload.optional')}</span>
-            </label>
-            <input className="input" id="ev-loc" value={form.location} maxLength={200} onChange={(e) => setForm({ ...form, location: e.target.value })} />
-          </div>
-          <div className="field">
-            <label className="label" htmlFor="ev-desc">
-              {t('upload.description')} <span className="subtle">{t('upload.optional')}</span>
-            </label>
-            <textarea className="input" id="ev-desc" rows={2} placeholder={t('upload.descriptionHint')} value={form.description} maxLength={5000} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-          </div>
-          <div className="field">
-            <span className="label" id="tier-l">
-              {t('upload.defaultTier')}
-            </span>
-            <TierChoice labelledBy="tier-l" value={form.defaultTier} onChange={(v) => setForm({ ...form, defaultTier: v })} long />
-            <span className="help">{t('upload.tierHelp')}</span>
-          </div>
+          <EventFields form={form} setForm={setForm} tierHelp={t('upload.tierHelp')} />
         </div>
       )}
       {error && (
@@ -205,21 +167,6 @@ function ChooseEvent({ initial, onPick }: { initial?: string; onPick: (id: strin
         </button>
       </div>
     </section>
-  );
-}
-
-function TierChoice({ value, onChange, labelledBy, label, long }: { value: Tier; onChange: (t: Tier) => void; labelledBy?: string; label?: string; long?: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <div role="radiogroup" aria-labelledby={labelledBy} aria-label={label} className="row" style={{ gap: 8 }}>
-      <button className="chip" role="radio" aria-checked={value === 'member'} aria-pressed={value === 'member'} onClick={() => onChange('member')}>
-        {t(long ? 'upload.allMembers' : 'upload.members')}
-      </button>
-      <button className="chip" role="radio" aria-checked={value === 'core'} aria-pressed={value === 'core'} onClick={() => onChange('core')}>
-        <Icon name="shield" size="sm" />
-        {t(long ? 'upload.coreOnly' : 'upload.core')}
-      </button>
-    </div>
   );
 }
 

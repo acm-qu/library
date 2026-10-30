@@ -68,23 +68,12 @@ export function AccountScreen() {
         <div className="field">
           <span className="label">{t('account.role')}</span>
           <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
-            {me.role === 'core' ? (
-              <>
-                <span className="tier">
-                  <Icon name="shield" />
-                  {t('account.coreMember')}
-                </span>
-                {me.isAdmin && <span className="tier">{t('account.admin')}</span>}
-                <span className="t-sm muted">{t('account.coreHelp')}</span>
-              </>
-            ) : (
-              <>
-                <span className="tier" style={{ color: 'var(--text-2)' }}>
-                  {t('account.member')}
-                </span>
-                <span className="t-sm muted">{t('account.memberHelp')}</span>
-              </>
-            )}
+            {/* Only core accounts sign in; admin adds platform management. */}
+            <span className="tier">
+              <Icon name="shield" />
+              {t(me.isAdmin ? 'account.admin' : 'account.coreMember')}
+            </span>
+            <span className="t-sm muted">{t(me.isAdmin ? 'account.adminHelp' : 'account.coreHelp')}</span>
           </div>
         </div>
       </section>

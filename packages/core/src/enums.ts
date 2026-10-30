@@ -1,5 +1,6 @@
 // Value sets shared by the database CHECK constraints, the zod schemas and the web app.
 // Kept free of drizzle imports so the browser bundle can use them.
+// Accounts are all 'core' (admin is a flag on top). 'member' stays for the DB CHECK, old rows and the signed-out viewer.
 export const ROLES = ['member', 'core'] as const;
 export const USER_STATUSES = ['active', 'disabled'] as const;
 export const TIERS = ['member', 'core'] as const;

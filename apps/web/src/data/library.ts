@@ -1,5 +1,5 @@
 import { isUnfinished } from '@acm/core/status';
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from '../api/library.ts';
 
 export function useEvents(f: api.EventFilters) {
@@ -26,6 +26,33 @@ export function useEventAssets(eventId: string | undefined, f: api.AssetFilters)
     enabled: !!eventId,
     placeholderData: keepPreviousData,
     refetchInterval: (query) => (query.state.data?.pages.some((p) => p.items.some((a) => isUnfinished(a.status) || a.processing)) ? 5000 : false),
+  });
+}
+
+/** Refreshes the lists and years (the date may move it) and every cached detail, which is keyed by slug or by id. */
+export function usePatchEvent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Parameters<typeof api.patchEvent>[1]) => api.patchEvent(id, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['events'] });
+      void qc.invalidateQueries({ queryKey: ['event'] });
+    },
+  });
+}
+
+export function useDeleteEvent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.deleteEvent,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['events'] });
+      void qc.invalidateQueries({ queryKey: ['uploads'] });
+      void qc.invalidateQueries({ queryKey: ['admin'] });
+      // Marked stale but not refetched: the open event page would flash "not found" before it navigates away.
+      void qc.invalidateQueries({ queryKey: ['event'], refetchType: 'none' });
+      void qc.invalidateQueries({ queryKey: ['event-assets'], refetchType: 'none' });
+    },
   });
 }
 

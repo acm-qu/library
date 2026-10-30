@@ -18,9 +18,9 @@ const hashCode = (pepper: Buffer, email: string, code: string) =>
 
 export const newCode = () => String(randomInt(0, 1_000_000)).padStart(6, '0');
 
-/** Whether this address may sign in right now. */
-export function canSignIn(user: Pick<User, 'email' | 'status'> | undefined, allowlist: readonly string[]): user is User {
-  return !!user && user.status === 'active' && (allowlist.length === 0 || allowlist.includes(user.email));
+/** Whether this address may sign in right now. Only core accounts sign in; everyone else browses signed out. */
+export function canSignIn(user: Pick<User, 'email' | 'status' | 'role'> | undefined, allowlist: readonly string[]): user is User {
+  return !!user && user.status === 'active' && user.role === 'core' && (allowlist.length === 0 || allowlist.includes(user.email));
 }
 
 /** Issue a code. Returns the code only for an address that can sign in; the caller mails it. */

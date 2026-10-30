@@ -31,6 +31,13 @@ describe('request-code', () => {
     expect(rows.map((r) => r.email).sort()).toEqual(['nobody@qu.edu.qa', 'sara@qu.edu.qa']);
   });
 
+  it('treats a leftover member account like an unknown email', async () => {
+    await addUser('old@qu.edu.qa', { role: 'member' });
+    expect((await request('old@qu.edu.qa')).statusCode).toBe(204);
+    await t.lastCode();
+    expect(t.sent).toEqual([]);
+  });
+
   it('keeps only the newest code valid', async () => {
     await addUser('sara@qu.edu.qa');
     await request('sara@qu.edu.qa');

@@ -33,33 +33,34 @@ async function asset(o: Partial<typeof assets.$inferInsert> = {}) {
 describe('access', () => {
   it('is invisible to non-admins', async () => {
     for (const url of ['/api/admin/users', '/api/admin/jobs', '/api/admin/storage', '/api/admin/settings']) expect((await call('GET', url, core.sid)).statusCode).toBe(404);
-    expect((await call('POST', '/api/admin/users', core.sid, { email: 'x@y.qa', role: 'member' })).statusCode).toBe(404);
+    expect((await call('POST', '/api/admin/users', core.sid, { email: 'x@y.qa' })).statusCode).toBe(404);
   });
 });
 
 describe('members', () => {
-  it('adds one member, refuses duplicates and non-core admins', async () => {
+  it('adds core accounts or admins (never members) and refuses duplicates', async () => {
     expect((await call('POST', '/api/admin/users', admin.sid, { email: 'New@QU.edu.qa', name: 'New', role: 'member' })).statusCode).toBe(201);
-    expect((await call('POST', '/api/admin/users', admin.sid, { email: 'new@qu.edu.qa', role: 'member' })).statusCode).toBe(409);
-    expect((await call('POST', '/api/admin/users', admin.sid, { email: 'a@qu.edu.qa', role: 'member', isAdmin: true })).statusCode).toBe(400);
+    expect((await call('POST', '/api/admin/users', admin.sid, { email: 'new@qu.edu.qa' })).statusCode).toBe(409);
+    expect((await call('POST', '/api/admin/users', admin.sid, { email: 'boss@qu.edu.qa', isAdmin: true })).statusCode).toBe(201);
     const list = (await call('GET', '/api/admin/users?q=new', admin.sid)).json();
-    expect(list.items.map((u: { email: string }) => u.email)).toEqual(['new@qu.edu.qa']);
-    expect(list.counts).toMatchObject({ all: 3, core: 2, admins: 1 });
+    expect(list.items.map((u: { email: string; role: string }) => [u.email, u.role])).toEqual([['new@qu.edu.qa', 'core']]);
+    expect(list.counts).toMatchObject({ all: 4, core: 4, admins: 2 });
   });
 
   it('bulk-adds a pasted list and explains what it skipped', async () => {
-    const r = (await call('POST', '/api/admin/users/bulk', admin.sid, { emails: ['a@qu.edu.qa, B@qu.edu.qa\nnot-an-email', 'a@qu.edu.qa', 'c@qu.edu.qa'], role: 'member' })).json();
+    const r = (await call('POST', '/api/admin/users/bulk', admin.sid, { emails: ['a@qu.edu.qa, B@qu.edu.qa\nnot-an-email', 'a@qu.edu.qa', 'c@qu.edu.qa'], isAdmin: true })).json();
     expect(r.created).toBe(2);
+    expect((await db.select().from(users).where(eq(users.email, 'b@qu.edu.qa')))[0]).toMatchObject({ role: 'core', isAdmin: true });
     expect(r.skipped).toEqual(expect.arrayContaining([{ email: 'not-an-email', reason: 'invalid' }, { email: 'a@qu.edu.qa', reason: 'duplicate' }, { email: 'c@qu.edu.qa', reason: 'exists' }]));
   });
 
-  it('keeps at least one admin, demotes admin with role, and ends sessions on disable', async () => {
+  it('keeps at least one admin, demotes an admin to core, and ends sessions on disable', async () => {
     expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { isAdmin: false })).statusCode).toBe(403);
     expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { status: 'disabled' })).statusCode).toBe(403);
     expect((await call('PATCH', `/api/admin/users/${core.id}`, admin.sid, { isAdmin: true })).statusCode).toBe(200);
-    expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { role: 'member' })).statusCode).toBe(200);
+    expect((await call('PATCH', `/api/admin/users/${admin.id}`, admin.sid, { isAdmin: false })).statusCode).toBe(200);
     const [demoted] = await db.select().from(users).where(eq(users.id, admin.id));
-    expect([demoted!.role, demoted!.isAdmin]).toEqual(['member', false]);
+    expect([demoted!.role, demoted!.isAdmin]).toEqual(['core', false]);
     expect((await call('PATCH', `/api/admin/users/${admin.id}`, core.sid, { status: 'disabled' })).statusCode).toBe(200);
     expect(await db.select().from(sessions).where(eq(sessions.userId, admin.id))).toHaveLength(0);
     expect((await db.select().from(auditLog)).map((a) => a.action).filter((a) => a === 'user.update')).toHaveLength(3);

@@ -7,11 +7,11 @@ export const UsersPage = z.object({
   nextCursor: z.string().nullable(),
   counts: z.object({ all: z.number(), core: z.number(), admins: z.number(), disabled: z.number() }),
 });
-export type UserFilter = { q?: string; role?: 'member' | 'core'; status?: 'active' | 'disabled' };
+export type UserFilter = { q?: string; status?: 'active' | 'disabled' };
 export const getUsers = (f: UserFilter, cursor?: string) => call(UsersPage, `/admin/users${q({ ...f, cursor, limit: 50 })}`);
-export const createUser = (b: { email: string; name: string; role: 'member' | 'core' }) => call(z.object({ id: z.string() }), '/admin/users', { method: 'POST', json: b });
-export const bulkUsers = (emails: string, role: 'member' | 'core') => call(BulkUsersResult, '/admin/users/bulk', { method: 'POST', json: { emails: [emails], role } });
-export const patchUser = (id: string, b: Partial<{ role: 'member' | 'core'; isAdmin: boolean; status: 'active' | 'disabled'; name: string }>) =>
+export const createUser = (b: { email: string; name: string; isAdmin: boolean }) => call(z.object({ id: z.string() }), '/admin/users', { method: 'POST', json: b });
+export const bulkUsers = (emails: string, isAdmin: boolean) => call(BulkUsersResult, '/admin/users/bulk', { method: 'POST', json: { emails: [emails], isAdmin } });
+export const patchUser = (id: string, b: Partial<{ isAdmin: boolean; status: 'active' | 'disabled'; name: string }>) =>
   call(null, `/admin/users/${id}`, { method: 'PATCH', json: b });
 
 export type JobTab = 'running' | 'queued' | 'failed' | 'needs_review' | 'recent';

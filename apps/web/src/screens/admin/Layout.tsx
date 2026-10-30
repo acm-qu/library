@@ -21,6 +21,7 @@ export function AdminLayout() {
           {t('admin.nav')}
         </span>
         {link('/admin/members', t('admin.members'))}
+        {link('/admin/events', t('admin.events'))}
         {link('/admin/queue', t('admin.queue'))}
         {link('/admin/storage', t('admin.storage'))}
       </nav>

@@ -1,7 +1,8 @@
 # QU ACM Media Library
 
 Photo and video library for the QU ACM student chapter: member-tier items are public (no sign-in), core-tier
-items and uploads need a core-team session. Source requirements: `docs/HANDOFF.md` (backend)
+items and uploads need a core-team session. Every account is `core` (admin is a flag on top); the `member`
+role is only the signed-out viewer and old rows. Source requirements: `docs/HANDOFF.md` (backend)
 and `docs/DESIGN-HANDOFF.md` (the Darkroom Archive design). The build plan with all system diagrams is
 `plans/acm-media-library/plan.mdx` (open it with `plans/run-plan.sh`).
 

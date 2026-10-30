@@ -16,22 +16,20 @@ export type AdminUser = z.infer<typeof AdminUser>;
 export const AdminUserPage = page(AdminUser);
 export const AdminUserQuery = PageQuery.extend({
   q: z.string().trim().max(200).optional(),
-  role: z.enum(ROLES).optional(),
   status: z.enum(USER_STATUSES).optional(),
 });
 export const CreateUserBody = z.object({
   email: Email,
   name: z.string().trim().max(120).default(''),
-  role: z.enum(ROLES),
   isAdmin: z.boolean().default(false),
 });
-export const BulkUsersBody = z.object({ emails: z.array(z.string()).min(1).max(1000), role: z.enum(ROLES) });
+export const BulkUsersBody = z.object({ emails: z.array(z.string()).min(1).max(1000), isAdmin: z.boolean().default(false) });
 export const BulkUsersResult = z.object({
   created: z.number().int(),
   skipped: z.array(z.object({ email: z.string(), reason: z.enum(['invalid', 'exists', 'duplicate']) })),
 });
 export const PatchUserBody = z
-  .object({ role: z.enum(ROLES), isAdmin: z.boolean(), status: z.enum(USER_STATUSES), name: z.string().trim().max(120) })
+  .object({ isAdmin: z.boolean(), status: z.enum(USER_STATUSES), name: z.string().trim().max(120) })
   .partial();
 
 export const JOB_TABS = ['running', 'queued', 'failed', 'needs_review', 'recent'] as const;
