@@ -159,6 +159,7 @@
     "tierHelpEdit": "Items already in the event keep their own setting.",
     "delete": "Delete event",
     "deleteTitle": "Delete {title}?",
+    "deleteGirlsOnly": "This event has girls-only items, so a female admin has to delete it.",
     "deleteBody": "All of its photos and videos are deleted too. This can't be undone."
   },
   "tile": {

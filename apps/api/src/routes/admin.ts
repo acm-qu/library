@@ -5,7 +5,7 @@ import { statfs } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerConfig } from '@acm/core/config';
 import { parseMasterKey, unwrapKey } from '@acm/core/crypto';
-import { accessRequests, appSettings, assetKeys, assets, type Db, events, jobs, legacyGender, processingRuns, renditions, sessions, users } from '@acm/core/db';
+import { accessRequests, appSettings, assetKeys, assets, type Db, events, jobs, processingRuns, renditions, sessions, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { revDir, tonemapGatePath } from '@acm/core/paths';
 import {
@@ -94,7 +94,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
     if (exists) throw new HttpError('conflict', { fields: { email: 'exists' } }, 'Someone with that email is already a member.');
     const id = newId();
     await db.transaction(async (tx) => {
-      await tx.insert(users).values({ id, ...body, gender: legacyGender(body.isFemale), role: 'core', createdBy: v.id });
+      await tx.insert(users).values({ id, ...body, role: 'core', createdBy: v.id });
       await audit(tx, v.id, 'user.create', { type: 'user', id }, { email: body.email, isAdmin: body.isAdmin });
     });
     return reply.code(201).send({ id });
@@ -127,7 +127,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
       const [exists] = await tx.select({ id: users.id }).from(users).where(eq(users.email, r.email));
       if (exists) return new HttpError('conflict', { fields: { email: 'exists' } }, 'Someone with that email is already a member.');
       const userId = newId();
-      await tx.insert(users).values({ id: userId, email: r.email, name: r.name, isFemale: r.isFemale, gender: legacyGender(r.isFemale), role: 'core', isAdmin: false, status: 'active', createdBy: v.id });
+      await tx.insert(users).values({ id: userId, email: r.email, name: r.name, isFemale: r.isFemale, role: 'core', isAdmin: false, status: 'active', createdBy: v.id });
       await tx.update(accessRequests).set({ status: 'approved', decidedAt: new Date(), decidedBy: v.id }).where(eq(accessRequests.id, r.id));
       await audit(tx, v.id, 'access_request.approve', { type: 'user', id: userId }, { requestId: r.id });
       return { userId, email: r.email };

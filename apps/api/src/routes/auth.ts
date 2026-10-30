@@ -1,5 +1,5 @@
 import type { ServerConfig } from '@acm/core/config';
-import { accessRequests, type Db, legacyGender, users } from '@acm/core/db';
+import { accessRequests, type Db, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { Me, RequestAccessBody, RequestCodeBody, VerifyBody } from '@acm/core/schemas';
 import { and, eq } from 'drizzle-orm';
@@ -51,7 +51,7 @@ export function authRoutes(app: FastifyInstance, deps: { db: Db; cfg: ServerConf
       const [pending] = await db.select({ id: accessRequests.id }).from(accessRequests).where(and(eq(accessRequests.email, body.email), eq(accessRequests.status, 'pending')));
       if (pending) return;
       // The partial unique index settles a race between two identical requests.
-      await db.insert(accessRequests).values({ id: newId(), ...body, gender: legacyGender(body.isFemale), requestIp: req.ip }).onConflictDoNothing();
+      await db.insert(accessRequests).values({ id: newId(), ...body, requestIp: req.ip }).onConflictDoNothing();
     });
     return reply.code(204).send();
   });

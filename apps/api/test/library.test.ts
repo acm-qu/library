@@ -117,6 +117,9 @@ describe('girls only', () => {
     // Nor can he edit or delete an event that is hidden from him.
     expect((await send('PATCH', `/api/events/${girlsNight}`, maleAdmin, { title: 'x' })).statusCode).toBe(404);
     expect((await send('DELETE', `/api/events/${girlsNight}`, maleAdmin)).statusCode).toBe(404);
+    // A visible event that still holds girls-only items needs a female admin to delete it.
+    expect((await send('DELETE', `/api/events/${mixed}`, maleAdmin)).statusCode).toBe(403);
+    expect((await get(`/api/events/${mixed}`, maleAdmin)).statusCode).toBe(200);
     expect((await get(`/api/assets/${girls}`, core)).json()).toMatchObject({ girlsOnly: true, canEdit: false });
     for (const sid of [maleAdmin, maleCore]) expect((await get(`/api/assets/${girls}`, sid)).statusCode).toBe(404);
     expect((await anon(`/api/assets/${girls}`)).statusCode).toBe(404);
@@ -144,15 +147,6 @@ describe('girls only', () => {
     ]);
   });
 
-  it('decides by is_female alone, not the deprecated gender text', async () => {
-    const girls = await addAsset(await addEvent('Mixed', '2026-10-17'), { girlsOnly: true });
-    const { sid: female } = await cookieFor('f@qu.edu.qa', 'core');
-    const legacyOnly = await addUser('l@qu.edu.qa', { isFemale: null, gender: 'female' });
-    const legacy = (await createSession(db, legacyOnly.id, { ip: null, userAgent: null })).token;
-    expect((await db.select().from(users).where(eq(users.email, 'f@qu.edu.qa')))[0]).toMatchObject({ isFemale: true, gender: null });
-    expect((await get(`/api/assets/${girls}`, female)).json()).toMatchObject({ girlsOnly: true });
-    expect((await get(`/api/assets/${girls}`, legacy)).statusCode).toBe(404);
-  });
 });
 
 describe('event writes', () => {

@@ -174,6 +174,11 @@ export function eventRoutes(app: FastifyInstance, { db }: { db: Db }) {
     const v = viewerOf(req);
     const { id } = z.object({ id: Id }).parse(req.params);
     await findVisibleEvent(db, v, id); // same 404 as the page for an event this admin can't see
+    // Deleting an event deletes everything in it, so items this admin can't see (girls-only) need an admin who can.
+    if (!seesGirlsOnly(v)) {
+      const [hidden] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.eventId, id), eq(assets.girlsOnly, true), isNull(assets.deletedAt))).limit(1);
+      if (hidden) throw new HttpError('not_allowed', {}, 'This event has girls-only items, so a female admin has to delete it.');
+    }
     await db.transaction(async (tx) => {
       const [ev] = await tx.update(events).set({ deletedAt: new Date() }).where(and(eq(events.id, id), isNull(events.deletedAt))).returning({ id: events.id });
       if (!ev) throw notFound();

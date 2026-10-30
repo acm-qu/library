@@ -40,7 +40,7 @@ describe('access', () => {
 describe('access requests', () => {
   async function pending(email: string, name = 'Huda') {
     const id = newId();
-    await db.insert(accessRequests).values({ id, email, name, isFemale: true, gender: 'female' });
+    await db.insert(accessRequests).values({ id, email, name, isFemale: true });
     return id;
   }
 
@@ -55,11 +55,11 @@ describe('access requests', () => {
     expect((await call('POST', `/api/admin/access-requests/${old}/approve`, core.sid)).statusCode).toBe(404);
   });
 
-  it('approve creates an active core user with the name and isFemale (and the legacy gender), audits and mails', async () => {
+  it('approve creates an active core user with the name and isFemale, audits and mails', async () => {
     const id = await pending('huda@qu.edu.qa');
     expect((await call('POST', `/api/admin/access-requests/${id}/approve`, admin.sid)).statusCode).toBe(200);
     const [u] = await db.select().from(users).where(eq(users.email, 'huda@qu.edu.qa'));
-    expect(u).toMatchObject({ name: 'Huda', isFemale: true, gender: 'female', role: 'core', isAdmin: false, status: 'active', createdBy: admin.id });
+    expect(u).toMatchObject({ name: 'Huda', isFemale: true, role: 'core', isAdmin: false, status: 'active', createdBy: admin.id });
     expect((await db.select().from(accessRequests))[0]).toMatchObject({ status: 'approved', decidedBy: admin.id });
     expect((await db.select().from(auditLog).where(eq(auditLog.action, 'access_request.approve'))).length).toBe(1);
     await new Promise((r) => setImmediate(r));
@@ -92,7 +92,7 @@ describe('members', () => {
     expect((await call('POST', '/api/admin/users', admin.sid, { email: 'boss@qu.edu.qa', isAdmin: true, isFemale: false })).statusCode).toBe(201);
     expect((await call('POST', '/api/admin/users', admin.sid, { email: 'x@qu.edu.qa', isFemale: 'other' })).statusCode).toBe(400);
     expect((await call('GET', '/api/admin/users?q=boss', admin.sid)).json().items[0].isFemale).toBe(false);
-    expect((await db.select().from(users).where(eq(users.email, 'boss@qu.edu.qa')))[0]).toMatchObject({ isFemale: false, gender: 'male' });
+    expect((await db.select().from(users).where(eq(users.email, 'boss@qu.edu.qa')))[0]).toMatchObject({ isFemale: false });
     const list = (await call('GET', '/api/admin/users?q=new', admin.sid)).json();
     expect(list.items.map((u: { email: string; role: string }) => [u.email, u.role])).toEqual([['new@qu.edu.qa', 'core']]);
     expect(list.counts).toMatchObject({ all: 4, core: 4, admins: 2 });
@@ -160,7 +160,7 @@ describe('super admin', () => {
 
   it('leaves approvals to every admin, always as core non-admins', async () => {
     const id = newId();
-    await db.insert(accessRequests).values({ id, email: 'huda@qu.edu.qa', name: 'Huda', isFemale: true, gender: 'female' });
+    await db.insert(accessRequests).values({ id, email: 'huda@qu.edu.qa', name: 'Huda', isFemale: true });
     expect((await call('POST', `/api/admin/access-requests/${id}/approve`, lead.sid)).statusCode).toBe(200);
     expect((await db.select().from(users).where(eq(users.email, 'huda@qu.edu.qa')))[0]).toMatchObject({ role: 'core', isAdmin: false });
   });

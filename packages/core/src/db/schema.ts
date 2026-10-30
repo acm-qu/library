@@ -26,8 +26,6 @@ import {
   ASSET_KINDS,
   ASSET_STATUSES,
   CURVE_SOURCES,
-  GENDERS,
-  type Gender,
   HDR_FORMATS,
   JOB_KINDS,
   JOB_OUTCOMES,
@@ -48,13 +46,6 @@ const created = () => ts('created_at').notNull().defaultNow();
 const inList = (col: string, values: readonly string[]) =>
   sql.raw(`${col} in (${values.map((v) => `'${v}'`).join(',')})`);
 
-/** The deprecated gender text for an is_female value, so a rolled-back release still reads correct data. */
-export function legacyGender(isFemale: boolean): Gender;
-export function legacyGender(isFemale: boolean | null): Gender | null;
-export function legacyGender(isFemale: boolean | null): Gender | null {
-  return isFemale === null ? null : isFemale ? 'female' : 'male';
-}
-
 export const users = pgTable(
   'users',
   {
@@ -66,8 +57,6 @@ export const users = pgTable(
     status: text('status', { enum: USER_STATUSES }).notNull().default('active'),
     // Null until the person completes their profile on first sign-in (or an admin sets it).
     isFemale: boolean('is_female'),
-    /** @deprecated dropped once no release reads it; written alongside is_female for rollback. */
-    gender: text('gender', { enum: GENDERS }),
     createdBy: uuid('created_by'),
     createdAt: created(),
     lastLoginAt: ts('last_login_at'),
@@ -78,7 +67,6 @@ export const users = pgTable(
     check('users_role_check', inList('role', ROLES)),
     check('users_status_check', inList('status', USER_STATUSES)),
     check('admin_is_core', sql`not ${t.isAdmin} or ${t.role} = 'core'`),
-    check('users_gender_check', inList('gender', GENDERS)),
   ],
 );
 
@@ -89,9 +77,7 @@ export const accessRequests = pgTable(
     id: uuid('id').primaryKey(),
     email: text('email').notNull(),
     name: text('name').notNull(),
-    isFemale: boolean('is_female'),
-    /** @deprecated dropped once no release reads it; written alongside is_female for rollback. */
-    gender: text('gender', { enum: GENDERS }).notNull(),
+    isFemale: boolean('is_female').notNull(),
     status: text('status', { enum: ACCESS_REQUEST_STATUSES }).notNull().default('pending'),
     createdAt: created(),
     decidedAt: ts('decided_at'),
@@ -101,7 +87,6 @@ export const accessRequests = pgTable(
   (t) => [
     uniqueIndex('access_requests_pending_email').on(t.email).where(sql`${t.status} = 'pending'`),
     check('access_requests_email_lower', sql`${t.email} = lower(${t.email})`),
-    check('access_requests_gender_check', inList('gender', GENDERS)),
     check('access_requests_status_check', inList('status', ACCESS_REQUEST_STATUSES)),
   ],
 );

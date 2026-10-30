@@ -185,15 +185,15 @@ describe('sessions', () => {
     expect((await me(b)).statusCode).toBe(401);
   });
 
-  it('PATCH /me sets name and isFemale, writes the legacy gender alongside, and validates both', async () => {
+  it('PATCH /me sets name and isFemale and validates both', async () => {
     await addUser('sara@qu.edu.qa');
     const c = await signIn('sara@qu.edu.qa');
     const patch = (payload: object) => t.app.inject({ method: 'PATCH', url: '/api/me', headers: H, cookies: { sid: c }, payload });
-    const row = async () => (await db.select({ isFemale: users.isFemale, gender: users.gender }).from(users).where(eq(users.email, 'sara@qu.edu.qa')))[0];
+    const row = async () => (await db.select({ isFemale: users.isFemale }).from(users).where(eq(users.email, 'sara@qu.edu.qa')))[0];
     expect((await patch({ name: '  Sara A.  ', isFemale: true })).json()).toEqual(expect.objectContaining({ name: 'Sara A.', isFemale: true }));
-    expect(await row()).toEqual({ isFemale: true, gender: 'female' });
+    expect(await row()).toEqual({ isFemale: true });
     expect((await patch({ name: 'Sara', isFemale: false })).json()).not.toHaveProperty('gender');
-    expect(await row()).toEqual({ isFemale: false, gender: 'male' });
+    expect(await row()).toEqual({ isFemale: false });
     for (const bad of [{ name: 'Sara' }, { name: ' ', isFemale: true }, { name: 'Sara', isFemale: 'female' }, { name: 'Sara', gender: 'female' }]) expect((await patch(bad)).statusCode).toBe(400);
   });
 });
@@ -230,7 +230,7 @@ describe('request-access', () => {
     expect((await ask('huda@qu.edu.qa', '10.0.0.2')).statusCode).toBe(204);
     expect((await ask('sara@qu.edu.qa', '10.0.0.3')).statusCode).toBe(204);
     const rows = await db.select().from(accessRequests);
-    expect(rows.map((r) => [r.email, r.name, r.isFemale, r.gender, r.status])).toEqual([['huda@qu.edu.qa', 'Huda', true, 'female', 'pending']]);
+    expect(rows.map((r) => [r.email, r.name, r.isFemale, r.status])).toEqual([['huda@qu.edu.qa', 'Huda', true, 'pending']]);
     expect(t.sent).toEqual([]);
   });
 

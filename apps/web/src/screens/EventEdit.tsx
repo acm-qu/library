@@ -125,7 +125,7 @@ export function DeleteEventConfirm({ event, onCancel, onDeleted }: { event: { id
       await del.mutateAsync(event.id);
       onDeleted();
     } catch (e) {
-      setError(errorText(e, t));
+      setError(e instanceof ApiError && e.code === 'not_allowed' ? t('event.deleteGirlsOnly') : errorText(e, t));
     }
   };
   return (
