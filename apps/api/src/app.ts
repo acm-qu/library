@@ -23,7 +23,6 @@ import { eventRoutes } from './routes/events.ts';
 import { healthRoutes } from './routes/health.ts';
 import { mediaRoutes } from './routes/media.ts';
 import { meRoutes } from './routes/me.ts';
-import { mosaicRoutes } from './routes/mosaic.ts';
 import { uploadRoutes } from './routes/uploads.ts';
 
 export type AppDeps = {
@@ -99,7 +98,6 @@ export async function buildApp(deps: AppDeps) {
   assetRoutes(app, { db });
   uploadRoutes(app, { db, cfg });
   mediaRoutes(app, { db, cfg });
-  mosaicRoutes(app, { db, cfg });
   adminRoutes(app, { db, cfg, mailer });
   healthRoutes(app, { db, cfg });
 

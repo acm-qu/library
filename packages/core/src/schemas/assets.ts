@@ -52,7 +52,3 @@ export const PatchAssetBody = z
   .object({ tier: z.enum(TIERS), girlsOnly: z.boolean(), eventId: Id })
   .partial()
   .refine((b) => b.tier !== undefined || b.girlsOnly !== undefined || b.eventId !== undefined, { message: 'empty_patch' });
-
-/** The sign-in page's photo mosaic: a few public thumbnails inlined in one response (data: URLs). */
-export const LoginMosaic = z.object({ images: z.array(z.object({ src: z.string(), width: z.number().int(), height: z.number().int() })) });
-export type LoginMosaic = z.infer<typeof LoginMosaic>;

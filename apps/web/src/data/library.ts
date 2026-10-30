@@ -57,5 +57,3 @@ export function useDeleteEvent() {
 }
 
 export const useAsset = (id: string) => useQuery({ queryKey: ['asset', id], queryFn: () => api.getAsset(id) });
-
-export const useLoginMosaic = () => useQuery({ queryKey: ['login-mosaic'], queryFn: api.getLoginMosaic, staleTime: 10 * 60_000, retry: false });
