@@ -54,7 +54,7 @@ export function probeVideo(ffprobe: string, file: string): Promise<Probe> {
   return new Promise((resolve) => {
     execFile(
       ffprobe,
-      ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
+      ['-v', 'error', '-threads', '1', '-print_format', 'json', '-show_format', '-show_streams', file],
       { timeout: 20_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, OMP_NUM_THREADS: '1' } },
       (err, stdout) => {
         if (err) return resolve(EMPTY);

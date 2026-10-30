@@ -28,7 +28,7 @@ import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { thumbUrl } from '../lib/dto.ts';
 import { HttpError, notFound } from '../lib/errors.ts';
-import { activeJobs, loadRho } from '../lib/queue.ts';
+import { activeJobs, drainOf, loadRho } from '../lib/queue.ts';
 import { sendFile, sendSealed } from './media.ts';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
@@ -229,7 +229,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
         failed,
         needsReview: review,
         queuedVideoS: videoS,
-        drainS: queue.at(-1)?.readyInS ?? 0,
+        drainS: drainOf(queue),
         workerTick: await setting<string>(db, 'worker_tick'),
       },
     };
@@ -321,7 +321,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
       renditions: rs.map((r) => ({ kind: r.kind, label: r.label, width: r.width, height: r.height, bandwidth: r.bandwidth, bytes: r.bytes, encrypted: r.encrypted })),
       runs: runs.map((r) => ({ id: r.id, startedAt: r.startedAt.toISOString(), finishedAt: iso(r.finishedAt), ok: r.ok, toneCurve: r.toneCurve, curveSource: r.curveSource, scores: r.scores, error: r.error })),
       jobs: js.map((j) => ({ id: j.id, kind: j.kind, state: j.state, attempts: j.attempts, lastError: j.lastError, createdAt: j.createdAt.toISOString(), finishedAt: iso(j.finishedAt) })),
-      reprocessEtaS: Math.round((queue.at(-1)?.readyInS ?? 0) + own),
+      reprocessEtaS: Math.round(drainOf(queue) + own),
     };
   });
 
@@ -409,7 +409,6 @@ export function adminRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
   app.patch('/api/admin/settings', { preHandler: requireAdmin }, async (req) => {
     const v = viewerOf(req);
     const body = PatchSettingsBody.parse(req.body);
-    if (body.tonemapAuto === true && !gatePassed()) throw new HttpError('not_allowed', {}, 'Automatic curve selection can be turned on once its validation has passed.');
     await db.transaction(async (tx) => {
       if (body.tonemapAuto !== undefined) await putSetting(tx, 'tonemap_auto', body.tonemapAuto);
       if (body.inodeLimit !== undefined) await putSetting(tx, 'inode_limit', body.inodeLimit);

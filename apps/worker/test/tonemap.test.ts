@@ -193,12 +193,12 @@ describe('tone curve choice', () => {
     expect(await runOf(id)).toMatchObject({ ok: true, toneCurve: 'hable203', curveSource: 'fallback', scores: { reason: 'scoring_failed', error: 'RuntimeError' } });
   }, 120_000);
 
-  it('stays off until the validation gate has passed, even when switched on', async () => {
+  it('runs as soon as it is switched on, before the validation gate has passed', async () => {
     await enableAuto(false);
     const id = await queued();
     await runUntil(ctx);
-    expect(await runOf(id)).toMatchObject({ toneCurve: 'hable203', curveSource: 'fallback', scores: null });
-    expect(await stubCalls()).toBe(0);
+    expect(await runOf(id)).toMatchObject({ toneCurve: 'reinhard203', curveSource: 'auto' });
+    expect(await stubCalls()).toBe(1);
   }, 120_000);
 
   it('cancelling while the curves are scored stops the job and keeps it cancelled', async () => {

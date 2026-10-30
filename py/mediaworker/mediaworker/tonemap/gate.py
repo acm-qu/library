@@ -1,4 +1,4 @@
-"""The validation gate that must pass before `tonemap_auto` can be switched on (handoff §8.5).
+"""The tone-curve validation gate (handoff §8.5); admins see its result next to the `tonemap_auto` setting.
 
     python -m mediaworker tonemap-gate --luts DIR --clips DIR --ffmpeg FF --ffprobe FP \\
         --chain-hlg VF --table-hlg VF --chain-pq VF --table-pq VF [--force]
@@ -12,8 +12,8 @@ A table filter contains {lut}, replaced by the table's path.
 3. Validation: the scorer ranks the chapter's six reviewed clips (T_hable/mobius/reinhard_100/203) against
    their HDR source. It must put a Hable clip first: reviewers picked hable_203, and the chapter accepts hable_100.
 
-Writes gate-passed.json (the API's switch for tonemap_auto) or gate-failed.json into --luts, each with a
-fingerprint of the code, versions and filters. A pass with the same fingerprint is reused unless --force.
+Writes gate-passed.json (shown to admins as "validation passed") or gate-failed.json into --luts, each with a
+fingerprint of the code, versions and filters. A result with the same fingerprint is reused unless --force.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import os
 import subprocess
 import tempfile
 import time
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,9 @@ DEFAULT_CLIPS = {
 
 
 def _ff(ffmpeg: str, args: list[str], timeout: float = 600, stdin: bytes | None = None) -> bytes:
-    return subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-y", *args], input=stdin, capture_output=True, check=True, timeout=timeout).stdout
+    """args end with the output; decoder, filter and encoder pools are capped (the host reports 64 CPUs)."""
+    capped = ["-filter_threads", "1", "-threads", "1", *args[:-1], "-threads", "1", args[-1]]
+    return subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-y", *capped], input=stdin, capture_output=True, check=True, timeout=timeout).stdout
 
 
 def pattern() -> np.ndarray:
@@ -169,13 +172,11 @@ def fingerprint(ffmpeg: str, filters: dict[str, dict[str, str]]) -> str:
     for f in sorted(Path(__file__).parent.glob("*.py")):
         h.update(f.read_bytes())
     h.update(json.dumps(filters, sort_keys=True).encode())
-    h.update(_ff(ffmpeg, ["-version"]).split(b"\n", 1)[0])
+    h.update(subprocess.run([ffmpeg, "-version"], capture_output=True, check=True, timeout=60).stdout.split(b"\n", 1)[0])
+    # Installed versions from metadata: importing torch here cost seconds and memory on every deploy.
     try:
-        import pyiqa
-        import torch
-
-        h.update(f"{torch.__version__} {pyiqa.__version__}".encode())
-    except ImportError:
+        h.update(f"{metadata.version('torch')} {metadata.version('pyiqa')}".encode())
+    except metadata.PackageNotFoundError:
         h.update(b"no-torch")
     h.update(str(luts.LUT_VERSION).encode())
     return h.hexdigest()[:16]
@@ -191,12 +192,13 @@ def run(lut_dir: Path, clip_dir: Path, ffmpeg: str, ffprobe: str, filters: dict[
     started = time.monotonic()
     fp = fingerprint(ffmpeg, filters)
     passed = lut_dir / PASSED
-    if not force and passed.exists():
+    # A failed result is reused too: re-running an unchanged gate fails the same way (it used to re-run every deploy).
+    for prev_file in (() if force else (passed, lut_dir / FAILED)):
         try:
-            prev = json.loads(passed.read_text())
+            prev = json.loads(prev_file.read_text())
             if prev.get("fingerprint") == fp:
                 return {**prev, "reused": True}
-        except ValueError:
+        except (OSError, ValueError):
             pass
     table_info = luts.ensure(lut_dir)
     spec = DEFAULT_CLIPS

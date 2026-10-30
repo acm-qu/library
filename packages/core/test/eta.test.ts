@@ -28,4 +28,11 @@ describe('ETA', () => {
     expect(nextRho(0.6, 100, 100)).toBeCloseTo(0.68);
     expect(nextRho(0.6, 100, 0)).toBe(0.6);
   });
+
+  it('keeps learned values in sane bounds', () => {
+    expect(nextRho(2.9, 6000, 100)).toBe(3); // a throttled run can't push every later ETA past 3× real time
+    expect(nextRho(0.31, 0, 100)).toBe(0.3);
+    expect(nextScoreSeconds(880, 5000)).toBe(900);
+    expect(nextScoreSeconds(65, 1)).toBe(60);
+  });
 });

@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { assets, events, jobs } from '@acm/core/db';
+import { appSettings, assets, events, jobs } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { originalPath } from '@acm/core/paths';
 import { eq } from 'drizzle-orm';
@@ -192,6 +192,7 @@ describe.runIf(hasFfmpeg)('my uploads and retry', () => {
   it('lists my items newest first with status, and retries a failed one', async () => {
     await upload(`${fx}/photo.jpg`, 'first.jpg');
     await upload(`${fx}/photo.jpg`, 'second.jpg');
+    await db.insert(appSettings).values({ key: 'worker_tick', value: new Date().toISOString() });
     const mine = (await t.app.inject({ method: 'GET', url: '/api/uploads/mine', cookies: { sid: core.sid } })).json();
     expect(mine.items.map((i: { filename: string }) => i.filename)).toEqual(['second.jpg', 'first.jpg']);
     expect(mine.items[0]).toMatchObject({ status: 'queued', eventTitle: 'E', readyInS: expect.any(Number) });
@@ -218,6 +219,10 @@ describe.runIf(hasFfmpeg)('my uploads buckets and duplicates index', () => {
     expect(all.counts).toEqual({ all: 2, active: 2, attention: 0, ready: 0 });
     expect(all.items.map((i: { filename: string; queuePosition: number }) => [i.filename, i.queuePosition])).toEqual([['b.mp4', 2], ['a.jpg', 1]]);
     expect((await get('?bucket=ready')).items).toHaveLength(0);
+    // An upload nobody has touched for an hour stays listed under all, but not as active.
+    await db.insert(assets).values({ id: newId(), eventId, kind: 'image', tier: 'member', status: 'uploading', originalFilename: 'gone.jpg', originalExt: 'jpg', uploaderId: core.id, updatedAt: new Date(Date.now() - 2 * 3600_000) });
+    expect((await get('')).counts).toEqual({ all: 3, active: 2, attention: 0, ready: 0 });
+    expect((await get('?bucket=active')).items.map((i: { filename: string }) => i.filename)).not.toContain('gone.jpg');
     const existing = await t.app.inject({ method: 'GET', url: `/api/uploads/existing?eventId=${eventId}`, cookies: { sid: core.sid } });
     expect(existing.json().items.map((i: { filename: string }) => i.filename).sort()).toEqual(['a.jpg', 'b.mp4']);
   });

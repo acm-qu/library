@@ -188,5 +188,9 @@ describe('admin overrides', () => {
     expect(s.bytesOriginals).toBeGreaterThan(0);
     const [h] = await db.select().from(appSettings).where(eq(appSettings.key, 'storage_history'));
     expect(h!.value).toHaveLength(1);
+    // After a pass: skipped while the last walk is under 15 min old.
+    const { storageStatsIfStale } = await import('../src/stats.ts');
+    expect(await storageStatsIfStale(ctx, 15 * 60_000, new Date(Date.parse(s.at) + 60_000))).toBeNull();
+    expect(await storageStatsIfStale(ctx, 15 * 60_000, new Date(Date.parse(s.at) + 16 * 60_000))).toMatchObject({ files: s.files });
   }, 60_000);
 });

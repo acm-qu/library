@@ -36,6 +36,7 @@ export function MyUploadsScreen() {
     return [...m.values()];
   }, [items]);
   const maxEta = Math.max(0, ...items.filter((i) => i.readyInS != null).map((i) => i.readyInS!));
+  const waiting = !maxEta && items.some((i) => i.status === 'queued' || i.status === 'processing');
   const live = !!counts && counts.active > 0;
 
   return (
@@ -46,7 +47,7 @@ export function MyUploadsScreen() {
           {!counts && q.isPending && <Skeleton h={26} w={320} />}
           {counts && (
             <span className="t-body muted tnum">
-              {t('myUploads.summary', { active: counts.active, eta: maxEta > 0 ? readyAt(maxEta) : 'none', review: items.filter((i) => i.status === 'needs_review').length })}
+              {t('myUploads.summary', { active: counts.active, eta: maxEta > 0 ? readyAt(maxEta) : waiting ? 'waiting' : 'none', review: items.filter((i) => i.status === 'needs_review').length })}
             </span>
           )}
         </div>
@@ -154,7 +155,9 @@ function Row({ r, isAdmin }: { r: { item: MyUploadItem; more: number; bytes: num
         ? t('myUploads.waitingAdmin')
         : i.readyInS != null
           ? t('myUploads.readyAbout', { time: readyAt(i.readyInS) })
-          : '';
+          : i.status === 'queued' || i.status === 'processing'
+            ? t('myUploads.waitingProcessor')
+            : '';
   const err = i.status === 'failed' || i.status === 'needs_review' ? t(`uploadErrors.${(i.error ?? 'generic') as 'generic'}`, { defaultValue: t('uploadErrors.generic') }) : null;
 
   return (

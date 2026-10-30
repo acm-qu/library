@@ -6,7 +6,7 @@ import path from 'node:path';
 import { appSettings, type Asset, assets, type Job, jobs, processingRuns, TONE_CURVES, type ToneCurve } from '@acm/core/db';
 import { DEFAULT_RHO, nextRho, nextScoreSeconds, SCORE_SECONDS } from '@acm/core/eta';
 import { newId } from '@acm/core/ids';
-import { lutPath, tmpDir, tonemapGatePath } from '@acm/core/paths';
+import { lutPath, tmpDir } from '@acm/core/paths';
 import { eq } from 'drizzle-orm';
 import { type Ctx, type JobScope, Permanent } from '../context.ts';
 import { baseFilter, classify, hlsArgs, ladder, parseMaster, type ProbeJson } from '../lib/ffmpeg.ts';
@@ -17,7 +17,7 @@ import { type Out, publish } from './publish.ts';
 
 async function probe(ctx: Ctx, src: string): Promise<ProbeJson> {
   try {
-    const { stdout } = await run(ctx.cfg.FFPROBE, ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', src], { timeoutMs: 60_000 });
+    const { stdout } = await run(ctx.cfg.FFPROBE, ['-v', 'error', '-threads', '1', '-print_format', 'json', '-show_format', '-show_streams', src], { timeoutMs: 60_000 });
     return JSON.parse(stdout) as ProbeJson;
   } catch (e) {
     if (e instanceof ChildFailed && e.code === 'exit') throw new Permanent('decode_failed', 'ffprobe could not read the file');
@@ -99,7 +99,7 @@ export async function processVideo(ctx: Ctx, job: Job, a: Asset, src: string, sc
 
     await scope.step('Making poster', 0.92);
     const posterPng = path.join(tmp, 'poster.png');
-    await run(ctx.cfg.FFMPEG, ['-nostdin', '-hide_banner', '-y', '-threads', '2', '-ss', String(Math.max(0, c.durationS * 0.1)), '-i', src, '-frames:v', '1', '-vf', vf.replace(/,format=yuv420p$/, ''), posterPng], { timeoutMs: 120_000 });
+    await run(ctx.cfg.FFMPEG, ['-nostdin', '-hide_banner', '-y', '-filter_threads', '1', '-threads', '1', '-ss', String(Math.max(0, c.durationS * 0.1)), '-i', src, '-frames:v', '1', '-vf', vf.replace(/,format=yuv420p$/, ''), '-threads', '1', posterPng], { timeoutMs: 120_000 });
     const stills = path.join(tmp, 'stills');
     const img = await mediaworker<{ files: { view: { file: string; width: number; height: number; bytes: number }; thumb: { file: string; width: number; height: number; bytes: number } } }>(
       ctx.cfg.PYTHON,
@@ -155,10 +155,10 @@ const FALLBACK: ToneCurve = 'hable203';
 type Choice = { curve: ToneCurve; source: 'auto' | 'fallback' | 'override'; scores: Record<string, unknown> | null };
 type SelectOut = { curve: ToneCurve; source: 'auto' | 'fallback'; reason: string | null; candidates: unknown[]; best?: string; frames: { t: number; why: string }[]; size: number[]; ms: Record<string, number>; maxRssMb: number };
 
-/** Automatic selection runs only when an admin switched it on and the validation gate has passed on this host. */
+/** Automatic selection runs whenever an admin switched it on; the validation gate's result is information only. */
 async function autoEnabled(ctx: Ctx): Promise<boolean> {
   const [row] = await ctx.db.select().from(appSettings).where(eq(appSettings.key, 'tonemap_auto'));
-  return row?.value === true && existsSync(tonemapGatePath(ctx.cfg.LUTS_DIR));
+  return row?.value === true;
 }
 
 /** Handoff §8.5: an admin override wins; then automatic selection when enabled; Hable (203) otherwise and on any error. */

@@ -73,7 +73,7 @@ export const ResolveBody = z.object({ action: z.enum(['process_default', 'origin
 
 export const AppSettings = z.object({
   tonemapAuto: z.boolean(),
-  /** Whether the tone-curve validation gate has passed in this release (tonemapAuto can't be enabled before). */
+  /** Whether the tone-curve validation gate has passed on this server (information only; tonemapAuto works either way). */
   tonemapGatePassed: z.boolean(),
   /** null = the host hasn't told us the file-count limit. */
   inodeLimit: z.number().int().positive().nullable(),

@@ -1,5 +1,5 @@
-// Storage stats (nightly cron, and after any worker pass that ran jobs): bytes and file count under MEDIA_ROOT, kept in app_settings for Admin · Storage.
-// Counting files on every page view would walk the whole tree; only passes that changed files re-walk it.
+// Storage stats (nightly cron, and after a worker pass that ran jobs, at most every 15 min): bytes and file count under
+// MEDIA_ROOT, kept in app_settings for Admin · Storage. Counting files on every page view would walk the whole tree.
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { appSettings } from '@acm/core/db';
@@ -41,4 +41,11 @@ export async function storageStats(ctx: Ctx, now = new Date()) {
     await ctx.db.insert(appSettings).values({ key, value }).onConflictDoUpdate({ target: appSettings.key, set: { value } });
   ctx.log.info(stats, 'storage stats');
   return stats;
+}
+
+/** After a worker pass: re-walk only when the last measurement is older than `maxAgeMs` (the walk is all metadata IO). */
+export async function storageStatsIfStale(ctx: Ctx, maxAgeMs = 15 * 60_000, now = new Date()) {
+  const [row] = await ctx.db.select().from(appSettings).where(eq(appSettings.key, 'storage_stats'));
+  const at = Date.parse((row?.value as { at?: string } | undefined)?.at ?? '');
+  return now.getTime() - at < maxAgeMs ? null : storageStats(ctx, now);
 }

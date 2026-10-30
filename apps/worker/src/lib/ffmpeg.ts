@@ -121,12 +121,13 @@ export function hlsArgs(o: {
   const g = String(2 * fps);
   const split = n > 1 ? `,split=${n}${o.rungs.map((_, i) => `[s${i}]`).join('')}` : '[s0]';
   const fc = `[0:v]${o.vf}${split};${o.rungs.map((r, i) => `[s${i}]${scaleFor(r.h)}[v${i}]`).join(';')}`;
-  const args = ['-nostdin', '-hide_banner', '-y', '-threads', '2', '-i', o.src, '-filter_complex_threads', '2', '-filter_complex', fc];
+  // One thread each for decode, filters and every x264 rung (3 rungs ≈ 3 cores), so the API keeps the 4th core.
+  const args = ['-nostdin', '-hide_banner', '-y', '-filter_threads', '1', '-filter_complex_threads', '1', '-threads', '1', '-i', o.src, '-filter_complex', fc];
   o.rungs.forEach((_, i) => {
     args.push('-map', `[v${i}]`);
     if (o.hasAudio) args.push('-map', '0:a:0');
   });
-  args.push('-c:v', 'libx264', '-threads', '2', '-preset', 'veryfast', '-profile:v', 'high', '-pix_fmt', 'yuv420p');
+  args.push('-c:v', 'libx264', '-threads', '1', '-preset', 'veryfast', '-profile:v', 'high', '-pix_fmt', 'yuv420p');
   o.rungs.forEach((r, i) => args.push(`-crf:v:${i}`, String(r.crf), `-maxrate:v:${i}`, r.maxrate, `-bufsize:v:${i}`, r.bufsize));
   if (o.vfr) args.push('-fps_mode', 'cfr', '-r', String(fps));
   args.push('-g', g, '-keyint_min', g, '-sc_threshold', '0');

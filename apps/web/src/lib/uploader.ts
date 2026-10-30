@@ -90,10 +90,25 @@ function startOne(it: Item) {
   });
 }
 
+export const isVideo = (f: File) => f.type.startsWith('video/') || /\.(mov|mp4|m4v)$/i.test(f.name);
+
+/** Waiting items to start now: up to PARALLEL files, at most one of them a video (the server's disk IO is capped). */
+export function toStart(list: Item[]): Item[] {
+  const busy = list.filter((i) => i.status === 'uploading');
+  let video = busy.some((i) => isVideo(i.file));
+  const out: Item[] = [];
+  for (const it of list) {
+    if (busy.length + out.length >= PARALLEL) break;
+    if (it.status !== 'waiting' || (video && isVideo(it.file))) continue;
+    video ||= isVideo(it.file);
+    out.push(it);
+  }
+  return out;
+}
+
 function pump() {
   if (!navigator.onLine) return;
-  const running = items.filter((i) => i.status === 'uploading').length;
-  for (const it of items.filter((i) => i.status === 'waiting').slice(0, Math.max(0, PARALLEL - running))) startOne(it);
+  for (const it of toStart(items)) startOne(it);
 }
 
 export const uploader = {

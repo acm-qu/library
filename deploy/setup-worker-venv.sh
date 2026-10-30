@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create or update the worker's own Python virtualenv (~/venvs/worker). Nothing is installed system-wide:
-# deleting ~/venvs/worker removes all of it. Safe to re-run; deploy.sh runs it on every release.
+# deleting ~/venvs/worker removes all of it. Safe to re-run; deploy.sh runs it when py/ changes.
 #   setup-worker-venv.sh <release dir> [--with-tonemap]
 set -euo pipefail
 REL=${1:?usage: setup-worker-venv.sh <release dir> [--with-tonemap]}
@@ -16,7 +16,8 @@ extra=()
 [ "${2:-}" = "--with-tonemap" ] && extra=(--extra-index-url https://download.pytorch.org/whl/cpu)
 spec="$REL/py/mediaworker"
 [ "${2:-}" = "--with-tonemap" ] && spec="$REL/py/mediaworker[tonemap]"
-"$VENV/bin/pip" install --quiet --upgrade "${extra[@]}" "$spec"
+# No --upgrade: pinned versions only, and anything already satisfied stays as it is (an upgrade changes the gate's fingerprint).
+"$VENV/bin/pip" install --quiet "${extra[@]}" "$spec"
 "$VENV/bin/python" -m mediaworker versions
 # DISTS and TOPIQ-FR weights (~0.6 GB, once) go into ~/.cache now, so a job never downloads anything.
 [ "${2:-}" = "--with-tonemap" ] && "$VENV/bin/python" -m mediaworker tonemap-weights

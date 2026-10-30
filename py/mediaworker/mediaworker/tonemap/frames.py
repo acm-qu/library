@@ -45,9 +45,13 @@ class Pick:
     why: str  # 'even' (centre of an equal interval) or 'bright' (one of the brightest frames)
 
 
+# Input side of every ffmpeg call: the host reports 64 CPUs, and uncapped filter/decoder pools start a thread per reported CPU.
+THREADS = ["-filter_threads", "1", "-threads", "2"]
+
+
 def probe(ffprobe: str, src: str) -> Probe:
     out = subprocess.run(
-        [ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", src],
+        [ffprobe, "-v", "error", "-threads", "1", "-print_format", "json", "-show_format", "-show_streams", src],
         capture_output=True, check=True, timeout=60,
     ).stdout
     p = json.loads(out)
@@ -86,8 +90,8 @@ def _vf(size: tuple[int, int], kind: str) -> str:
 def extract(ffmpeg: str, src: str, t: float, size: tuple[int, int], kind: str, timeout: float = 120) -> np.ndarray:
     """One frame at time t (accurate seek), downscaled to size, as encoded R′G′B′ (h, w, 3)."""
     out = subprocess.run(
-        [ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-threads", "2", "-ss", f"{t:.3f}", "-i", src,
-         "-frames:v", "1", "-an", "-sn", "-dn", "-vf", _vf(size, kind), "-f", "rawvideo", "-"],
+        [ffmpeg, "-nostdin", "-hide_banner", "-v", "error", *THREADS, "-ss", f"{t:.3f}", "-i", src,
+         "-frames:v", "1", "-an", "-sn", "-dn", "-vf", _vf(size, kind), "-threads", "1", "-f", "rawvideo", "-"],
         capture_output=True, check=True, timeout=timeout,
     ).stdout
     frames = _raw_to_rgb(out, *size)
@@ -100,8 +104,8 @@ def proxy_scan(ffmpeg: str, src: str, p: Probe, kind: str, long_edge: int = 160,
     """Every keyframe at a small size (about one per second on phones): brightness and uniformity per frame."""
     size = fit(p.width, p.height, long_edge)
     proc = subprocess.run(
-        [ffmpeg, "-nostdin", "-hide_banner", "-v", "info", "-threads", "2", "-skip_frame", "nokey", "-i", src,
-         "-an", "-sn", "-dn", "-fps_mode", "passthrough", "-vf", f"showinfo,{_vf(size, kind)}", "-f", "rawvideo", "-"],
+        [ffmpeg, "-nostdin", "-hide_banner", "-v", "info", *THREADS, "-skip_frame", "nokey", "-i", src,
+         "-an", "-sn", "-dn", "-fps_mode", "passthrough", "-vf", f"showinfo,{_vf(size, kind)}", "-threads", "1", "-f", "rawvideo", "-"],
         capture_output=True, check=True, timeout=timeout,
     )
     times = [float(m) for m in re.findall(r"pts_time:\s*(-?[\d.]+)", proc.stderr.decode("utf-8", "replace"))]

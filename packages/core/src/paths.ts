@@ -18,5 +18,5 @@ export const tmpDir = (mediaRoot: string, jobId: string) => path.join(mediaRoot,
 
 /** One tone-curve table under LUTS_DIR, as written by `python -m mediaworker luts`. */
 export const lutPath = (lutsDir: string, curve: string, transfer: 'hlg' | 'pq') => path.join(lutsDir, `${curve}.${transfer}.cube`);
-/** Written by the tone-curve validation gate; tonemap_auto can only be switched on while it exists. */
+/** Written by the tone-curve validation gate; shown to admins next to tonemap_auto (it doesn't block it). */
 export const tonemapGatePath = (lutsDir: string) => path.join(lutsDir, 'gate-passed.json');

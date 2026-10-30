@@ -4,7 +4,7 @@
 import { appSettings, assets, type Job, jobs } from '@acm/core/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { Cancelled, type Ctx, jobScope, Permanent } from './context.ts';
-import { ChildFailed } from './lib/spawn.ts';
+import { ChildFailed, takePeakThreads } from './lib/spawn.ts';
 import { runProcess } from './jobs/process.ts';
 import { runPurge } from './jobs/purge.ts';
 import { runRetier } from './jobs/retier.ts';
@@ -60,10 +60,11 @@ async function markAssetFailed(ctx: Ctx, job: Job) {
 export async function runJob(ctx: Ctx, job: Job) {
   const scope = jobScope(ctx, job);
   const started = Date.now();
+  takePeakThreads();
   try {
     const outcome = job.kind === 'purge' ? await runPurge(ctx, job) : job.kind === 'retier' ? await runRetier(ctx, job) : await runProcess(ctx, job, scope);
     await ctx.db.update(jobs).set({ state: 'done', outcome: outcome ?? 'ok', finishedAt: new Date(), step: null, progress: 1, lastError: null }).where(eq(jobs.id, job.id));
-    ctx.log.info({ job: job.id, kind: job.kind, asset: job.assetId, ms: Date.now() - started, outcome: outcome ?? 'ok' }, 'job done');
+    ctx.log.info({ job: job.id, kind: job.kind, asset: job.assetId, ms: Date.now() - started, peakThreads: takePeakThreads(), outcome: outcome ?? 'ok' }, 'job done');
   } catch (e) {
     // A child killed because the job was cancelled reports ChildFailed('cancelled'); it is a cancel, not a failure.
     if (e instanceof Cancelled || (e instanceof ChildFailed && e.code === 'cancelled')) {
@@ -95,7 +96,9 @@ export async function runUntil(ctx: Ctx, deadline = Date.now() + DEADLINE_MS) {
   while (Date.now() < deadline) {
     const job = await claim(ctx);
     if (!job) break;
-    await runJob(ctx, job);
+    // Heartbeat during long encodes too: the API treats a tick older than 3 min as a stopped processor.
+    const beat = setInterval(() => void tick(ctx).catch(() => {}), 60_000);
+    await runJob(ctx, job).finally(() => clearInterval(beat));
     await tick(ctx);
     n++;
   }

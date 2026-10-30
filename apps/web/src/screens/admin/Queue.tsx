@@ -26,7 +26,7 @@ export function QueueScreen() {
   const counts: Record<api.JobTab, number | undefined> = { running: s?.running, queued: s?.queued, failed: s?.failed, needs_review: s?.needsReview, recent: undefined };
   const items = q.data?.items ?? [];
   const tick = s?.workerTick ? new Date(s.workerTick) : null;
-  const stale = tick ? Date.now() - tick.getTime() > 5 * 60_000 : true;
+  const stale = tick ? Date.now() - tick.getTime() > 3 * 60_000 : true; // the API drops ETAs at the same age
   const fmt = (i: api.AdminJobItem) => (i.asset?.kind === 'image' ? t('admin.fmt_photo') : t(`admin.fmt_${(i.asset?.hdr ?? 'sdr') as 'sdr'}`));
   const name = (i: api.AdminJobItem) => (
     <div className="stack" style={{ minWidth: 0 }}>
@@ -69,7 +69,11 @@ export function QueueScreen() {
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
           <Stat label={t('admin.q_waiting')} value={String(s.running + s.queued)} note={t('admin.q_waitingNote', { running: s.running, queued: s.queued })} />
           <Stat label={t('admin.q_video')} value={s.queuedVideoS ? fmtEta(s.queuedVideoS) : '0'} note={t('admin.q_timesHelp').split('.')[0]!} />
-          <Stat label={t('admin.q_clear')} value={s.drainS ? fmtEta(s.drainS) : t('admin.q_empty')} note={s.drainS ? t('admin.q_clearNote', { time: readyAt(s.drainS) }) : t('admin.q_idle')} />
+          <Stat
+            label={t('admin.q_clear')}
+            value={s.drainS ? fmtEta(s.drainS) : s.running + s.queued ? t('myUploads.waitingProcessor') : t('admin.q_empty')}
+            note={s.drainS ? t('admin.q_clearNote', { time: readyAt(s.drainS) }) : s.running + s.queued ? '' : t('admin.q_idle')}
+          />
         </div>
       )}
       {s && (
@@ -116,7 +120,7 @@ export function QueueScreen() {
                   <div className="progress info">
                     <span style={{ width: `${Math.round((i.progress ?? 0) * 100)}%` }} />
                   </div>
-                  {i.startedAt && <span className="t-sm subtle tnum">{t('admin.q_runningFor', { d: fmtDuration((Date.now() - Date.parse(i.startedAt)) / 1000), time: readyAt(i.readyInS ?? 0) })}</span>}
+                  {i.startedAt && <span className="t-sm subtle tnum">{i.readyInS != null ? t('admin.q_runningFor', { d: fmtDuration((Date.now() - Date.parse(i.startedAt)) / 1000), time: readyAt(i.readyInS) }) : t('admin.q_runningForWaiting', { d: fmtDuration((Date.now() - Date.parse(i.startedAt)) / 1000) })}</span>}
                 </div>
                 <div className="row" style={{ gap: 4 }}>
                   {details(i)}
@@ -150,7 +154,7 @@ export function QueueScreen() {
                       <td>{name(i)}</td>
                       <td className="tnum">{i.asset?.durationS ? fmtDuration(i.asset.durationS) : '—'}</td>
                       <td>{fmt(i)}</td>
-                      <td className="tnum">{i.readyInS != null ? readyAt(i.readyInS) : '—'}</td>
+                      <td className="tnum">{i.readyInS != null ? readyAt(i.readyInS) : t('myUploads.waitingProcessor')}</td>
                       <td>
                         <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
                           {n > 0 && (

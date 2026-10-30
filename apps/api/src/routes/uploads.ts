@@ -95,6 +95,8 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
       if (id) {
         const [own] = await db.select({ uploaderId: assets.uploaderId }).from(assets).where(eq(assets.uploadId, id));
         if (!own || own.uploaderId !== v.id) throw notFound();
+        // Each chunk marks the row as alive; one untouched for an hour no longer counts as active.
+        if (req.method === 'PATCH') await db.update(assets).set({ updatedAt: new Date() }).where(and(eq(assets.uploadId, id), eq(assets.status, 'uploading')));
       }
       // A finished upload's tus files are gone; answer a resuming client's HEAD from the asset row instead.
       if (req.method === 'HEAD' && id) {
@@ -123,6 +125,8 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
     ready: ['ready', 'original_only'],
   } as const;
   const MineCursor = z.object({ c: z.string(), i: z.string() });
+  // An upload whose browser went away (tab closed, offline) stays 'uploading' until cleanup; after an hour it isn't active.
+  const abandoned = sql`(${assets.status} = 'uploading' and ${assets.updatedAt} < now() - interval '1 hour')`;
 
   app.get('/api/uploads/mine', { preHandler: requireCore }, async (req) => {
     const v = viewerOf(req);
@@ -140,6 +144,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
           isNull(events.deletedAt),
           sql`${assets.status} <> 'deleting'`,
           inBucket ? inArray(assets.status, [...inBucket]) : undefined,
+          qry.bucket === 'active' ? sql`not ${abandoned}` : undefined,
           cur ? sql`(${assets.createdAt}, ${assets.id}) < (${cur.c}::timestamptz, ${cur.i}::uuid)` : undefined,
         ),
       )
@@ -157,15 +162,15 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
             .orderBy(desc(jobs.finishedAt))
         : Promise.resolve([]),
       db
-        .select({ status: assets.status, n: sql<number>`count(*)::int` })
+        .select({ status: assets.status, abandoned: sql<boolean>`${abandoned}`, n: sql<number>`count(*)::int` })
         .from(assets)
         .innerJoin(events, eq(events.id, assets.eventId))
         .where(and(eq(assets.uploaderId, v.id), isNull(assets.deletedAt), isNull(events.deletedAt), sql`${assets.status} <> 'deleting'`))
-        .groupBy(assets.status),
+        .groupBy(assets.status, abandoned),
     ]);
     const active = byAsset(queue);
     const queuedOrder = queue.filter((j) => j.state === 'queued');
-    const count = (sts: readonly string[] | null) => countRows.filter((r) => !sts || sts.includes(r.status)).reduce((s, r) => s + r.n, 0);
+    const count = (sts: readonly string[] | null, live = false) => countRows.filter((r) => (!sts || sts.includes(r.status)) && !(live && r.abandoned)).reduce((s, r) => s + r.n, 0);
     const errorOf = new Map<string, string | null>();
     for (const f of failures) if (f.assetId && !errorOf.has(f.assetId)) errorOf.set(f.assetId, f.error);
     const last = page.at(-1);
@@ -195,7 +200,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
         };
       }),
       nextCursor: rows.length > qry.limit && last ? encodeCursor({ c: last.c, i: last.a.id }) : null,
-      counts: { all: count(null), active: count(BUCKET_STATUSES.active), attention: count(BUCKET_STATUSES.attention), ready: count(BUCKET_STATUSES.ready) },
+      counts: { all: count(null), active: count(BUCKET_STATUSES.active, true), attention: count(BUCKET_STATUSES.attention), ready: count(BUCKET_STATUSES.ready) },
     };
   });
 

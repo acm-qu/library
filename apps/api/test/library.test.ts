@@ -1,4 +1,4 @@
-import { assets, auditLog, events, jobs, renditions } from '@acm/core/db';
+import { appSettings, assets, auditLog, events, jobs, renditions } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -140,6 +140,7 @@ describe('event assets', () => {
     await addAsset(ev, { tier: 'core', capturedAt: new Date(Date.UTC(2026, 9, 10, 11)) });
     const mine = await addAsset(ev, { status: 'processing', uploaderId: coreId });
     await db.insert(jobs).values({ id: newId(), assetId: mine, kind: 'process', state: 'running', step: 'Encoding 720p', progress: 0.5 });
+    await db.insert(appSettings).values({ key: 'worker_tick', value: new Date().toISOString() });
 
     const p1 = (await get(`/api/events/${ev}/assets?limit=3`, member)).json();
     const p2 = (await get(`/api/events/${ev}/assets?limit=3&cursor=${p1.nextCursor}`, member)).json();

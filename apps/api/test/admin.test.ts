@@ -80,7 +80,18 @@ describe('queue', () => {
     let q = (await call('GET', '/api/admin/jobs?tab=queued', admin.sid)).json();
     expect(q.items.map((j: { id: string }) => j.id)).toEqual([j1, j2]);
     expect(q.summary).toMatchObject({ queued: 2, running: 0, queuedVideoS: 180 });
+    // No worker heartbeat yet: no ETAs, rather than a clock that slides forward.
+    expect(q.items.map((j: { readyInS: number | null }) => j.readyInS)).toEqual([null, null]);
+    await db.insert(appSettings).values({ key: 'worker_tick', value: new Date().toISOString() });
+    q = (await call('GET', '/api/admin/jobs?tab=queued', admin.sid)).json();
     expect(q.items[1].readyInS).toBeGreaterThan(q.items[0].readyInS);
+    // A job waiting out a retry backoff has no ETA and doesn't delay the others.
+    const before = q.items[1].readyInS;
+    await db.update(jobs).set({ runAfter: new Date(Date.now() + 300_000) }).where(eq(jobs.id, j1));
+    q = (await call('GET', '/api/admin/jobs?tab=queued', admin.sid)).json();
+    expect(q.items[0].readyInS).toBeNull();
+    expect(q.items[1].readyInS).toBeLessThan(before);
+    await db.update(jobs).set({ runAfter: new Date() }).where(eq(jobs.id, j1));
 
     expect((await call('POST', `/api/admin/jobs/${j2}/prioritize`, admin.sid)).statusCode).toBe(200);
     q = (await call('GET', '/api/admin/jobs?tab=queued', admin.sid)).json();
@@ -137,11 +148,11 @@ describe('queue', () => {
 });
 
 describe('storage and settings', () => {
-  it('reports nightly stats and refuses auto curves before the validation gate', async () => {
+  it('reports nightly stats and allows auto curves before the validation gate', async () => {
     await db.insert(appSettings).values({ key: 'storage_stats', value: { at: '2026-10-29T02:00:00Z', bytesOriginals: 100, bytesRenditions: 20, files: 7 } });
     expect((await call('GET', '/api/admin/storage', admin.sid)).json()).toMatchObject({ bytesOriginals: 100, files: 7, inodeLimit: null });
-    expect((await call('PATCH', '/api/admin/settings', admin.sid, { tonemapAuto: true })).statusCode).toBe(403);
+    expect((await call('PATCH', '/api/admin/settings', admin.sid, { tonemapAuto: true })).statusCode).toBe(200);
     expect((await call('PATCH', '/api/admin/settings', admin.sid, { inodeLimit: 250000 })).statusCode).toBe(200);
-    expect((await call('GET', '/api/admin/settings', admin.sid)).json()).toEqual({ tonemapAuto: false, tonemapGatePassed: false, inodeLimit: 250000 });
+    expect((await call('GET', '/api/admin/settings', admin.sid)).json()).toEqual({ tonemapAuto: true, tonemapGatePassed: false, inodeLimit: 250000 });
   });
 });

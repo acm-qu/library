@@ -130,11 +130,11 @@ function ProcessingChip() {
   const q = useMyUploads('active');
   const items = q.data?.pages.flatMap((p) => p.items).filter((i) => i.status !== 'uploading') ?? [];
   if (!items.length) return null;
-  const eta = Math.max(0, ...items.map((i) => i.readyInS ?? 0));
+  const etas = items.flatMap((i) => (i.readyInS == null ? [] : [i.readyInS]));
   return (
     <Link to="/uploads" className="st st-p hide-sm" style={{ textDecoration: 'none' }} title={t('myUploads.processingTitle')}>
       <Icon name="refresh" className="spin" />
-      <span className="tnum">{t('myUploads.processingChip', { n: items.length, time: readyAt(eta) })}</span>
+      <span className="tnum">{etas.length ? t('myUploads.processingChip', { n: items.length, time: readyAt(Math.max(...etas)) }) : t('myUploads.processingChipWaiting', { n: items.length })}</span>
     </Link>
   );
 }

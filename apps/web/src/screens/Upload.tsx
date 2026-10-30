@@ -8,14 +8,13 @@ import { useEvent, useEvents } from '../data/library.ts';
 import { useCreateEvent, useExisting, useMyUploads } from '../data/uploads.ts';
 import { fmtBytes, fmtDate, readyAt } from '../i18n/format.ts';
 import { fmtEta } from '../lib/eta.ts';
-import { fileKey, type Item, type Tier, uploader, useUploads } from '../lib/uploader.ts';
+import { fileKey, isVideo, type Item, type Tier, uploader, useUploads } from '../lib/uploader.ts';
 import { type EventForm, EventFields, eventBody, FIELD_MSG, invalidFields, TierChoice } from './EventEdit.tsx';
 import { useOnline } from './States.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import { Rich } from '../ui/Rich.tsx';
 
 const ACCEPT = 'image/jpeg,image/png,image/heic,image/heif,image/avif,image/webp,video/mp4,video/quicktime,.heic,.heif,.mov';
-const isVideo = (f: File) => f.type.startsWith('video/') || /\.(mov|mp4|m4v)$/i.test(f.name);
 type Picked = { file: File; tier: Tier; dup: boolean; key: string };
 
 export function UploadScreen() {
@@ -327,13 +326,21 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
   );
 }
 
+/** Bytes per second over the last 20 s, and whether nothing moved in that time (re-checked every 5 s). */
 function useSpeed(sent: number) {
   const samples = useRef<{ t: number; b: number }[]>([]);
+  const moved = useRef({ t: Date.now(), b: sent });
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => rerender((n) => n + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
   const now = Date.now();
+  if (sent !== moved.current.b) moved.current = { t: now, b: sent };
   samples.current = [...samples.current.filter((s) => now - s.t < 20_000), { t: now, b: sent }];
   const first = samples.current[0]!;
   const dt = (now - first.t) / 1000;
-  return dt > 2 ? (sent - first.b) / dt : 0;
+  return { speed: dt > 2 ? (sent - first.b) / dt : 0, stalled: now - moved.current.t >= 20_000 };
 }
 
 function Progress({ batch }: { batch: Item[] }) {
@@ -341,9 +348,9 @@ function Progress({ batch }: { batch: Item[] }) {
   const total = batch.reduce((s, i) => s + i.total, 0);
   const sent = batch.reduce((s, i) => s + (i.status === 'done' ? i.total : i.sent), 0);
   const done = batch.filter((i) => i.status === 'done').length;
-  const speed = useSpeed(sent);
-  const left = speed > 0 ? fmtEta((total - sent) / speed) : 'none';
+  const { speed, stalled } = useSpeed(sent);
   const anyActive = batch.some((i) => i.status === 'uploading' || i.status === 'waiting');
+  const left = !anyActive || sent >= total ? 'none' : stalled ? (sent ? 'stalled' : 'waiting') : speed > 0 ? fmtEta((total - sent) / speed) : 'none';
   const pct = total ? Math.round((sent / total) * 100) : 0;
   const order: Record<string, number> = { failed: 0, uploading: 1, paused: 2, waiting: 3, done: 4, cancelled: 5 };
   const rows = [...batch].sort((a, b) => order[a.status]! - order[b.status]!);
@@ -438,7 +445,9 @@ function Done({ batch, eventSlug, onMore }: { batch: Item[]; eventSlug: string; 
   const { t } = useTranslation();
   const mine = useMyUploads('active');
   const ids = new Set(batch.map((i) => i.assetId).filter(Boolean));
-  const longest = Math.max(0, ...(mine.data?.pages.flatMap((p) => p.items) ?? []).filter((i) => ids.has(i.assetId) && i.kind === 'video').map((i) => i.readyInS ?? 0));
+  const here = (mine.data?.pages.flatMap((p) => p.items) ?? []).filter((i) => ids.has(i.assetId));
+  const longest = Math.max(0, ...here.filter((i) => i.kind === 'video').map((i) => i.readyInS ?? 0));
+  const waiting = here.length > 0 && here.every((i) => i.readyInS == null);
   const n = batch.filter((i) => i.status === 'done').length;
   return (
     <section className="stack" aria-labelledby="h-done" style={{ gap: 18, maxWidth: 680 }}>
@@ -449,7 +458,7 @@ function Done({ batch, eventSlug, onMore }: { batch: Item[]; eventSlug: string; 
       <h2 className="t-display login-title" id="h-done">
         {t('upload.doneTitle', { n })}
       </h2>
-      <p className="t-body muted">{longest > 0 ? <Rich k="upload.doneWithVideos" values={{ duration: fmtEta(longest), time: readyAt(longest) }} /> : t('upload.donePhotosOnly')}</p>
+      <p className="t-body muted">{waiting ? t('upload.doneWaiting') : longest > 0 ? <Rich k="upload.doneWithVideos" values={{ duration: fmtEta(longest), time: readyAt(longest) }} /> : t('upload.donePhotosOnly')}</p>
       <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         <Link className="btn btn-p" to="/uploads">
           {t('upload.goMyUploads')}

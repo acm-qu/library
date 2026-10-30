@@ -28,16 +28,27 @@ rsync -az --delete --exclude node_modules -e "ssh -i $KEY" dist/release/ "$HOST:
 ssh_ bash -s <<REMOTE
 set -euo pipefail
 cd $BASE/releases/$sha
-PATH=/opt/alt/alt-nodejs24/root/usr/bin:\$PATH $NPM install --omit=dev --no-audit --no-fund --loglevel=error
-bash ./deploy/setup-worker-venv.sh \$PWD --with-tonemap
-$NODE --env-file=$BASE/shared/.env migrate.mjs
+# Deploy work runs at the lowest CPU and IO priority, so the live site (and the account's 30 MB/s IO cap) come first.
+IONICE=\$(command -v ionice || true); [ -z "\$IONICE" ] && [ -x /usr/bin/ionice ] && IONICE=/usr/bin/ionice
+LOW="nice -n 19"; [ -n "\$IONICE" ] && LOW="\$IONICE -c3 \$LOW"
+PATH=/opt/alt/alt-nodejs24/root/usr/bin:\$PATH \$LOW $NPM install --omit=dev --no-audit --no-fund --loglevel=error
+# The venv, the scorer weights and the tone-curve gate only depend on py/, the venv script and the gate's filters;
+# skip them (torch, ~0.6 GB of weights, minutes of scoring) when none changed since the last successful run.
+# After changing ffmpeg by hand, rm $BASE/shared/.py-hash (or run the gate with --force).
+pyhash=\$(find py deploy/setup-worker-venv.sh worker/tonemap-gate.mjs -type f ! -name '*.pyc' ! -path '*.egg-info/*' ! -path '*/build/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-64)
+py_changed=; [ "\$pyhash" = "\$(cat $BASE/shared/.py-hash 2>/dev/null)" ] || py_changed=1
+[ -n "\$py_changed" ] && \$LOW bash ./deploy/setup-worker-venv.sh \$PWD --with-tonemap
+\$LOW $NODE --env-file=$BASE/shared/.env migrate.mjs
 ln -sfn releases/$sha $BASE/current.new && mv -T $BASE/current.new $BASE/current
 # Passenger's app root is the fixed launcher dir $BASE/app (registered in Setup Node.js App); it loads current/.
 mkdir -p $BASE/app/tmp && touch $BASE/app/tmp/restart.txt
 # The host runs Node under LiteSpeed, which ignores restart.txt; it respawns lsnode on the next request.
 pkill -u \$USER -f '^lsnode:$BASE/app/' || true
-# Tone-curve tables + validation gate (reused when nothing changed). A failed gate only keeps tonemap_auto off.
-$NODE --env-file=$BASE/shared/.env worker/tonemap-gate.mjs >> \$HOME/logs/acm-gate.log 2>&1 || echo "tone-curve gate crashed; see ~/logs/acm-gate.log"
+# Tone-curve tables + validation gate (its result is shown to admins; it doesn't switch anything off).
+if [ -n "\$py_changed" ]; then
+  if \$LOW $NODE --env-file=$BASE/shared/.env worker/tonemap-gate.mjs >> \$HOME/logs/acm-gate.log 2>&1; then echo "\$pyhash" > $BASE/shared/.py-hash
+  else echo "tone-curve gate crashed; see ~/logs/acm-gate.log"; fi
+fi
 ls -1dt $BASE/releases/* | tail -n +6 | xargs -r rm -rf --
 REMOTE
 

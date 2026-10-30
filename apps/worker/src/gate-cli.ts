@@ -1,7 +1,7 @@
 // Tone-curve validation gate (deploy.sh runs it; re-run by hand with --force):
 //   node --env-file=shared/.env worker/tonemap-gate.mjs [--force]
 // Passes the encoder's own filter strings to `python -m mediaworker tonemap-gate`, so the acceptance test checks
-// exactly what production runs. A pass writes LUTS_DIR/gate-passed.json, which lets an admin switch on tonemap_auto.
+// exactly what production runs. A pass writes LUTS_DIR/gate-passed.json, which admins see next to tonemap_auto.
 // The exit code is 0 whether or not the gate passes; only a crash is non-zero.
 import { cfg } from './config.ts';
 import { baseFilter } from './lib/ffmpeg.ts';

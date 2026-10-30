@@ -278,3 +278,16 @@ def test_fit_keeps_aspect_and_even_sizes():
     assert frames.fit(640, 360, 1024) == (640, 360)  # never upscaled
     w, h = frames.fit(1080, 1920, 720)
     assert h == 720 and w % 2 == 0
+
+
+# ── gate ──────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def test_gate_reuses_a_failed_result_with_the_same_fingerprint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from mediaworker.tonemap import gate
+
+    monkeypatch.setattr(gate, "fingerprint", lambda *_: "fp1")
+    monkeypatch.setattr(gate.luts, "ensure", lambda *_: pytest.fail("an unchanged gate must not re-run"))
+    (tmp_path / gate.FAILED).write_text('{"ok": false, "fingerprint": "fp1"}')
+    r = gate.run(tmp_path, tmp_path, "ffmpeg", "ffprobe", {})
+    assert r == {"ok": False, "fingerprint": "fp1", "reused": True}

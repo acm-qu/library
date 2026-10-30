@@ -14,7 +14,9 @@ export function MediaTile({ a, index, eventTitle }: { a: AssetTile; index: numbe
   const unfinished = a.status === 'uploading' || a.status === 'queued' || a.status === 'processing' || a.status === 'failed';
   const label = [
     a.status === 'processing'
-      ? t('tile.processing', { time: a.readyInS != null ? readyAt(a.readyInS) : '' })
+      ? a.readyInS != null
+        ? t('tile.processing', { time: readyAt(a.readyInS) })
+        : t('tile.processingNoEta')
       : a.status === 'queued' || a.status === 'uploading'
         ? t('tile.queued')
         : a.status === 'failed'

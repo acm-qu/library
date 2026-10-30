@@ -216,19 +216,19 @@ export function StorageScreen() {
       {settings && (
         <section className="panel stack" style={{ gap: 8 }}>
           <h2 className="t-h3">{t('admin.s_curveTitle')}</h2>
-          <div className="row" style={{ gap: 12 }}>
-            <button
-              role="switch"
-              aria-checked={settings.tonemapAuto}
-              aria-label={t('admin.s_curveTitle')}
-              className={`switch${settings.tonemapAuto ? ' on' : ''}`}
-              style={{ border: 0, opacity: settings.tonemapGatePassed ? 1 : 0.4, cursor: settings.tonemapGatePassed ? 'pointer' : 'not-allowed' }}
-              disabled={!settings.tonemapGatePassed || save.isPending}
-              onClick={() => save.mutate([{ tonemapAuto: !settings.tonemapAuto }])}
+          <label className="row" style={{ gap: 12, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              className="check"
+              checked={settings.tonemapAuto}
+              aria-describedby="curve-help"
+              onChange={(e) => save.mutate([{ tonemapAuto: e.target.checked }])}
             />
-            <span className="t-sm">{settings.tonemapAuto ? t('admin.s_curveOn') : t('admin.s_curveOff')}</span>
-          </div>
-          {!settings.tonemapGatePassed && <span className="help">{t('admin.s_curveGate')}</span>}
+            <span className="t-sm">{t('admin.s_curveLabel')}</span>
+          </label>
+          <span id="curve-help" className="help">
+            {settings.tonemapAuto ? t('admin.s_curveOn') : t('admin.s_curveOff')} {settings.tonemapGatePassed ? t('admin.s_curveGatePassed') : t('admin.s_curveGatePending')}
+          </span>
         </section>
       )}
     </>

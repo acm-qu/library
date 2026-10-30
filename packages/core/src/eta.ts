@@ -16,6 +16,9 @@ export const HDR_FIXED_SECONDS = 60;
 /** Automatic tone-curve scoring on the host: 8 frames × 4 curves at 1024 px measured 5.6 min (Oct 2026). */
 export const SCORE_SECONDS = 340;
 export const RHO_ALPHA = 0.2;
+/** Learned values stay in these bounds, so one throttled or odd run can't inflate (or zero) every later ETA. */
+export const RHO_RANGE = [0.3, 3] as const;
+export const SCORE_RANGE = [60, 900] as const;
 
 export const isHdr = (hdr: HdrFormat | null): boolean => hdr === 'hlg' || hdr === 'pq';
 
@@ -34,12 +37,13 @@ export function queueEtas(ordered: EtaJob[], rho: Rho): number[] {
 /** EMA update after a video job; `encodeS` excludes tone-curve scoring, which `hdrFixed` covers. */
 export function nextRho(current: number, encodeS: number, durationS: number): number {
   if (!(durationS > 0) || !(encodeS >= 0)) return current;
-  return (1 - RHO_ALPHA) * current + RHO_ALPHA * (encodeS / durationS);
+  return clamp(RHO_RANGE, (1 - RHO_ALPHA) * current + RHO_ALPHA * (encodeS / durationS));
 }
 
 /** EMA of the measured scoring time, so ETAs follow the real host once automatic selection runs. */
 export function nextScoreSeconds(current: number, measuredS: number): number {
-  return measuredS > 0 ? (1 - RHO_ALPHA) * current + RHO_ALPHA * measuredS : current;
+  return measuredS > 0 ? clamp(SCORE_RANGE, (1 - RHO_ALPHA) * current + RHO_ALPHA * measuredS) : current;
 }
 
-const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+const clamp = ([lo, hi]: readonly [number, number], x: number) => Math.min(hi, Math.max(lo, x));
+const clamp01 = (x: number) => clamp([0, 1], x);

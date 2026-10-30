@@ -10,17 +10,17 @@ export const useUsers = (f: api.UserFilter) =>
     placeholderData: keepPreviousData,
   });
 
-/** The queue polls every 5 s while anything is running or waiting. */
+/** The queue polls every 15 s while anything is running or waiting. */
 export const useJobs = (tab: api.JobTab) =>
   useQuery({
     queryKey: ['admin', 'jobs', tab],
     queryFn: () => api.getJobs(tab),
     placeholderData: keepPreviousData,
-    refetchInterval: (q) => (q.state.data && q.state.data.summary.running + q.state.data.summary.queued > 0 ? 5000 : false),
+    refetchInterval: (q) => (q.state.data && q.state.data.summary.running + q.state.data.summary.queued > 0 ? 15_000 : false),
   });
 
 export const useProcessing = (id: string) =>
-  useQuery({ queryKey: ['admin', 'processing', id], queryFn: () => api.getProcessing(id), refetchInterval: (q) => (q.state.data?.jobs.some((j) => j.state === 'queued' || j.state === 'running') ? 5000 : false) });
+  useQuery({ queryKey: ['admin', 'processing', id], queryFn: () => api.getProcessing(id), refetchInterval: (q) => (q.state.data?.jobs.some((j) => j.state === 'queued' || j.state === 'running') ? 15_000 : false) });
 export const useStorage = () => useQuery({ queryKey: ['admin', 'storage'], queryFn: api.getStorage });
 export const useSettings = () => useQuery({ queryKey: ['admin', 'settings'], queryFn: api.getSettings });
 

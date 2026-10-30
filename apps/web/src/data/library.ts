@@ -16,7 +16,7 @@ export const useYears = () => useQuery({ queryKey: ['events', 'years'], queryFn:
 
 export const useEvent = (idOrSlug: string) => useQuery({ queryKey: ['event', idOrSlug], queryFn: () => api.getEvent(idOrSlug) });
 
-/** Polls every 5 s while any loaded tile is still uploading, queued or processing (core members only see those). */
+/** Polls every 15 s while any loaded tile is still uploading, queued or processing (core members only see those). */
 export function useEventAssets(eventId: string | undefined, f: api.AssetFilters) {
   return useInfiniteQuery({
     queryKey: ['event-assets', eventId, f],
@@ -25,7 +25,7 @@ export function useEventAssets(eventId: string | undefined, f: api.AssetFilters)
     getNextPageParam: (p) => p.nextCursor ?? undefined,
     enabled: !!eventId,
     placeholderData: keepPreviousData,
-    refetchInterval: (query) => (query.state.data?.pages.some((p) => p.items.some((a) => isUnfinished(a.status) || a.processing)) ? 5000 : false),
+    refetchInterval: (query) => (query.state.data?.pages.some((p) => p.items.some((a) => isUnfinished(a.status) || a.processing)) ? 15_000 : false),
   });
 }
 
