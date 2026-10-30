@@ -6,29 +6,29 @@ status: draft
 
 # QU ACM Media Library: build and deploy plan
 
-**Objective.** Ship a private, login-only library for the chapter's event photos and videos. Members sign in with an emailed code, browse events, view fast WebP copies, stream videos at 360p / 720p / 1080p and download originals. Core members also see core-tier content (encrypted at rest), upload after events and manage events. Admins manage members, the processing queue, tone-curve overrides and storage. Everything runs on the single shared cPanel account `quhosting@qu.hosting.acm.org`.
+**Objective.** Ship a library for the chapter's event photos and videos. Member-tier items are **public**: anyone can browse events, view fast WebP copies, stream videos at 360p / 720p / 1080p and download originals without signing in (the UI labels this tier "Public"). Every account is a core account, and signing in with an emailed code shows core-tier content (encrypted at rest), lets the core team upload after events and edit events. Admin is a flag on top of core: admins delete events and manage members, the processing queue, tone-curve overrides and storage. Everything runs on the single shared cPanel account `quhosting@qu.hosting.acm.org`.
 
 **Sources.** The backend contract is `handoff-backend.md`, which is treated as requirements wherever it says *Decided*. The UI is the **Darkroom Archive** design on the Claude Design canvas *QU ACM Media Library* (30 artboards: desktop browse, upload and admin screens; phone screens in English and Arabic; system states; design system v1), with screen requirements from `handoff-design.md`. The design already exists, so the UI is built straight from it instead of from the interim UI the backend handoff describes. The handoff's layering rule still applies: pages never call `fetch` themselves.
 
 **Done means:**
-- Every screen group in the design runs against the real API, on phone and desktop, in light and dark themes. The Arabic boards follow the Arabic decision in Open Questions.
-- A real event flows through the system: upload 80 photos and 3 videos from a phone, close the tab, resume, wait for processing, then watch as a member. HLG iPhone footage is tone-mapped to SDR.
+- Every screen group in the design runs against the real API, on phone and desktop, in light and dark themes. The Arabic boards follow the Arabic decision in Decisions taken.
+- A real event flows through the system: upload 80 photos and 3 videos from a phone, close the tab, resume, wait for processing, then watch signed out. HLG iPhone footage is tone-mapped to SDR.
 - Core-tier files are encrypted on disk and still stream and download with HTTP Range.
 - The app is live on the production subdomain, with a cron-driven worker, nightly backups and docs (`docs/HANDOFF.md`, `docs/ops.md`, `docs/security.md`, `CLAUDE.md`).
 - All Vitest and pytest suites pass, plus a scripted smoke test against production.
 
-The decisions taken so far are listed at the bottom, and the two still open are in **Open Questions**.
+The decisions taken are listed at the bottom. The two questions that were open (OTP sender and build location) are now settled, and **Open Questions** records the answers.
 
 ### One event, end to end
 
-The day after the chapter's hackathon, a core member opens **Upload** on their phone over campus Wi-Fi. They create "Hackathon, day 1", select 80 photos and 3 iPhone videos, and the files start uploading in resumable 8 MiB chunks. They lock the phone; when they come back, a banner says "Resume 3 unfinished uploads", they pick the same files, and the uploads continue from where they stopped. The done screen says photos will be ready in a few seconds and videos in about 44 minutes. That estimate is possible because ingest already probed each video: 34 minutes of HLG footage at about 1.2× processing time, plus a minute of setup per video. Photos are ready in seconds because image jobs always run ahead of video jobs.
+The day after the chapter's hackathon, a core member opens **Upload** on their phone over campus Wi-Fi. They create "Hackathon, day 1", select 80 photos and 3 iPhone videos, and the files start uploading in resumable 8 MiB chunks, two at a time and never more than one video at once. They lock the phone; when they come back, a banner says "Resume 3 unfinished uploads", they pick the same files, and the uploads continue from where they stopped. The done screen says photos will be ready in a few seconds and videos in about 44 minutes. That estimate is possible because ingest already probed each video: 34 minutes of HLG footage at about 1.2× processing time, plus a minute of setup per video. Photos are ready in seconds because image jobs always run ahead of video jobs.
 
-Behind that, each finished upload becomes an `assets` row plus a `jobs` row. A cron-started worker takes one job at a time:
+Behind that, each finished upload becomes an `assets` row plus a `jobs` row, and the API starts the worker straight away (`WORKER_WAKE`); cron every 2 minutes is the safety net. The worker takes one job at a time:
 - Pillow writes `view.webp` and `thumb.webp`.
 - ffmpeg decodes each video once, tone-maps it, and writes a three-rung HLS ladder in single-file mode.
 - Core-tier outputs are sealed with per-asset keys.
 
-That evening a member opens the event on a laptop. They see only member-tier, ready items, and event counts include only what they can see. The video starts on Auto at 720p and switches to 1080p when they pick it, with every byte served through `/api/media/*` after a permission check.
+That evening a chapter member opens the event on a laptop without signing in. They read as the anonymous member viewer, so they see only member-tier ("Public"), ready items without uploader names, and event counts include only what they can see. The video starts on Auto at 720p and switches to 1080p when they pick it, with every byte served through `/api/media/*` after a permission check.
 
 ## What the server actually has (measured over SSH, 29 Oct 2026)
 
@@ -44,11 +44,11 @@ I ran read-only probes as `quhosting` on `server.hosting3.acm.org`. Most of the 
     ["ffmpeg", "~/bin static 7.0.2", "~/bin/ffmpeg and ffprobe present (chmod 700)", "FFMPEG=/home/quhosting/bin/ffmpeg"],
     ["flock", "Verify path", "/usr/bin/flock", "Cron line uses /usr/bin/flock -n"],
     ["Cron", "—", "crontab is empty", "Five new entries; nothing to merge"],
-    ["CPU / threads", "≈4 cores, 200 procs incl. threads", "nproc reports 64 and free reports a 128 GB host, so the tools see the host instead of the account limit", "Explicit thread caps everywhere (the handoff's §8.7 is load-bearing)"],
+    ["CPU / threads / IO", "≈4 cores, 200 procs incl. threads", "CloudLinux limits: 4 cores, 200 tasks including threads, 30 MB/s IO. nproc reports 64 and free reports a 128 GB host, so the tools see the host instead of the account limit", "Every ffmpeg/ffprobe call has explicit thread caps; the HLS encode uses one thread per stage and rung; worker children run at nice 19 under ionice -c3; the worker logs each job's peak thread count"],
     ["Inodes", "Limit unknown, 27,279 used", "cPanel quota: inode_limit 0 (unlimited at cPanel level), 27,280 used, 2.05 GB used", "Still budget files: bundle the API so node_modules on the server stays small; record venv inode cost"],
     ["Domains", "Open: e.g. library.qu.acm.org", "qu.acm.org DNS is on a2dns.com nameservers, so cPanel manages it; existing subdomains test, csewiki, better-schedule", "Create library.qu.acm.org in cPanel → Domains; AutoSSL issues the certificate"],
     ["Fixtures", "IMG_4515.MOV, T_* clips", "Already in ~ (IMG_4515.MOV 33 MB, T_hable/mobius/reinhard_100/203.mp4)", "Copy into the repo test fixtures (Git LFS not needed at these sizes)"],
-    ["Mail", "cPanel SMTP", "Mail is configured for qu.acm.org (~/etc/qu.acm.org)", "Create noreply@qu.acm.org; send through localhost:587 with STARTTLS"],
+    ["Mail", "cPanel SMTP", "Mail is configured for qu.acm.org (~/etc/qu.acm.org)", "Send from noreply@qu.acm.org (\"ACM Library\") through SMTP host mail.qu.acm.org, whose TLS certificate covers *.qu.acm.org"],
   ]}
 />
 
@@ -93,8 +93,8 @@ Everything except the users' browsers and their mail servers runs inside one Cag
 <div class="ctx">
   <section class="diagram-panel clients" data-rough>
     <p class="cap diagram-muted">Browsers</p>
-    <div class="diagram-node">Member<br><small>phone · laptop</small></div>
-    <div class="diagram-node">Core<br><small>uploads from phones at events</small></div>
+    <div class="diagram-node">Visitor, signed out<br><small>phone · laptop · member tier ("Public")</small></div>
+    <div class="diagram-node">Core (signed in)<br><small>uploads from phones at events</small></div>
     <div class="diagram-node">Admin<br><small>desktop</small></div>
     <div class="diagram-node mail">Inboxes<br><small>@qu.acm.org · QU student mail</small></div>
   </section>
@@ -104,11 +104,11 @@ Everything except the users' browsers and their mail servers runs inside one Cag
     <span class="diagram-pill">cookie sid + X-Requested-With</span>
     <span class="diagram-pill">tus PATCH 8 MiB</span>
     <span class="diagram-pill">HLS byte ranges</span>
-    <span class="diagram-pill">poll every 5 s</span>
+    <span class="diagram-pill">poll every 15 s</span>
   </div>
 
   <section class="diagram-panel host" data-rough>
-    <p class="cap diagram-muted">server.hosting3.acm.org · cPanel · CloudLinux CageFS · about 4 cores · 4 GB · 200 processes including threads</p>
+    <p class="cap diagram-muted">server.hosting3.acm.org · cPanel · CloudLinux CageFS · 4 cores · 4 GB · 200 tasks including threads · 30 MB/s IO</p>
     <div class="grid">
       <div class="diagram-box edge">Apache + Passenger<br><small>library.qu.acm.org · AutoSSL</small></div>
       <div class="arrow">→ spawns</div>
@@ -116,13 +116,13 @@ Everything except the users' browsers and their mail servers runs inside one Cag
 
       <div class="diagram-box db">PostgreSQL (cPanel)<br><small>quhosting_library · local socket</small></div>
       <div class="diagram-box fs">~/media<br><small>tus/ · assets/ab/&lt;id&gt;/ · tmp/</small></div>
-      <div class="diagram-box smtp">Exim SMTP<br><small>noreply@qu.acm.org</small></div>
+      <div class="diagram-box smtp">SMTP mail.qu.acm.org<br><small>noreply@qu.acm.org · "ACM Library"</small></div>
 
-      <div class="diagram-box cron">cron · every minute<br><small>/usr/bin/flock -n worker.lock</small></div>
+      <div class="diagram-box cron">cron every 2 min · API after each upload<br><small>flock -n worker.lock (cron) · flock -w 20 (WORKER_WAKE)</small></div>
       <div class="arrow">→ starts</div>
       <div class="diagram-box worker">Worker (Node)<br><small>claims one job · exits after 50 min</small></div>
 
-      <div class="diagram-box tool">~/bin/ffmpeg 7.0.2<br><small>nice 19 · -threads 2</small></div>
+      <div class="diagram-box tool">~/bin/ffmpeg 7.0.2<br><small>nice 19 · ionice -c3 · one thread per stage and rung</small></div>
       <div class="diagram-box tool">~/venvs/worker (Py 3.13)<br><small>Pillow · pillow-heif · pyiqa · torch CPU</small></div>
       <div class="diagram-box keys">~/keys (700)<br><small>transient HLS key files</small></div>
     </div>
@@ -131,6 +131,7 @@ Everything except the users' browsers and their mail servers runs inside one Cag
       <li>API → ~/media: read and stream; tus writes staging; finish hook moves the original</li>
       <li>Worker → ffmpeg, Python: spawn, JSON on stdout, progress on a pipe</li>
       <li>API → SMTP → inboxes: OTP mail</li>
+      <li>API → worker: WORKER_WAKE after ingest, in its own process group</li>
     </ul>
   </section>
 </div>
@@ -153,7 +154,7 @@ Everything except the users' browsers and their mail servers runs inside one Cag
 
 </Diagram>
 
-**Why this shape.** The host limits drive it. Passenger owns the HTTP process, so the API can't also run long background work: Passenger may recycle it, and CPU spent there counts against the same 4 cores. That's why processing runs in a separate cron-started worker under `flock`. The host allows 150 entry processes, and polling every 5 seconds is enough for live status, so there is no SSE or WebSocket in v1. Media never sits in a public directory: Apache serves only the built SPA via Passenger, and every media byte goes through `canView`.
+**Why this shape.** The host limits drive it. Passenger owns the HTTP process, so the API can't also run long background work: Passenger may recycle it, and CPU spent there counts against the same 4 cores. That's why processing runs in a separate worker under `flock`: the API starts it as soon as an upload finishes (`WORKER_WAKE`, the crontab's command with `flock -w 20`, so a running worker picks the job up and one that is exiting is waited out), and cron every 2 minutes covers admin actions, retries and crashes. The host allows 150 entry processes, and polling every 15 seconds is enough for live status, so there is no SSE or WebSocket in v1. Media never sits in a public directory: Apache serves only the built SPA via Passenger, and every media byte goes through `canView`, including for signed-out visitors.
 
 ### Host topology: directories, processes and cron
 
@@ -164,8 +165,9 @@ Everything except the users' browsers and their mail servers runs inside one Cag
   <section class="diagram-panel" data-rough>
     <p class="h">Code (deployed)</p>
     <div class="diagram-box"><b>~/apps/acm-media/releases/&lt;git-sha&gt;/</b><small>api/dist/main.js (one esbuild bundle) · api/app.cjs · web/dist/ · worker/dist/run.js · py/ · luts/*.cube · migrations/ · node_modules/ (sodium-native, pg only)</small></div>
-    <div class="diagram-box"><b>~/apps/acm-media/current</b> → releases/&lt;sha&gt;<small>Passenger app root; deploy = rsync new release, migrate, flip symlink, touch tmp/restart.txt</small></div>
-    <div class="diagram-box"><b>~/apps/acm-media/shared/.env</b> (600)<small>DATABASE_URL · MASTER_KEY · OTP_PEPPER · SMTP_* · MEDIA_ROOT · KEYS_DIR · FFMPEG · FFPROBE · PYTHON · PUBLIC_ORIGIN</small></div>
+    <div class="diagram-box"><b>~/apps/acm-media/current</b> → releases/&lt;sha&gt;<small>Passenger app root; deploy = rsync new release, migrate, flip symlink, restart the app process (docs/ops.md)</small></div>
+    <div class="diagram-box"><b>~/apps/acm-media/shared/.env</b> (600)<small>DATABASE_URL · MASTER_KEY · OTP_PEPPER · SMTP_* · MEDIA_ROOT · KEYS_DIR · FFMPEG · FFPROBE · PYTHON · PUBLIC_ORIGIN · LOG_FILE · WORKER_WAKE</small></div>
+    <div class="diagram-box"><b>~/apps/acm-media/shared/.py-hash</b><small>hash of py/ and the gate; deploys rebuild the venv, scorer weights and gate only when it changes</small></div>
     <div class="diagram-box"><b>~/library.qu.acm.org/.htaccess</b><small>Passenger block: AppRoot = current, Nodejs = ~/nodevenv/…/24/bin/node, StartupFile = api/app.cjs</small></div>
   </section>
 
@@ -174,22 +176,22 @@ Everything except the users' browsers and their mail servers runs inside one Cag
     <div class="diagram-box"><b>~/media/</b><small>tus/ staging · assets/ab/&lt;asset_id&gt;/ originals and renditions · tmp/&lt;job_id&gt;/ scratch</small></div>
     <div class="diagram-box"><b>~/keys/</b> (700)<small>&lt;job&gt;.keyinfo + key, deleted when ffmpeg exits</small></div>
     <div class="diagram-box"><b>PostgreSQL quhosting_library</b><small>role quhosting_library_app · cPanel → PostgreSQL Databases</small></div>
-    <div class="diagram-box"><b>~/backups/</b><small>pg_dump -Fc nightly, 14 kept</small></div>
-    <div class="diagram-box"><b>~/logs/</b><small>api.log · worker.log · cron.log, size-rotated</small></div>
+    <div class="diagram-box"><b>~/backups/</b><small>pg_dump -Fc -n public nightly, 14 kept</small></div>
+    <div class="diagram-box"><b>~/logs/</b><small>acm-api.log (LOG_FILE) · acm-worker.log · cron logs, size-rotated</small></div>
   </section>
 
   <section class="diagram-panel" data-rough>
     <p class="h">Processes</p>
-    <div class="diagram-node">Passenger → node (pinned to 1 process)<small>SPA + API; restarts on touch; UV_THREADPOOL_SIZE=4</small></div>
-    <div class="diagram-node">worker (0 or 1)<small>flock guarantees at most one</small></div>
-    <div class="diagram-node">ffmpeg / python children<small>nice 19, killed on timeout</small></div>
+    <div class="diagram-node">Passenger → node (pinned to 1 process)<small>SPA + API; restarted by deploy (docs/ops.md); UV_THREADPOOL_SIZE=4</small></div>
+    <div class="diagram-node">worker (0 or 1)<small>flock guarantees at most one; started by cron or by the API after an upload</small></div>
+    <div class="diagram-node">ffmpeg / python children<small>nice 19, ionice -c3, thread-capped, killed on timeout</small></div>
     <p class="h">crontab</p>
     <ul class="cron">
-      <li><code>* * * * *</code> worker</li>
+      <li><code>*/2 * * * *</code> worker (safety net: admin actions, retries, crashes)</li>
       <li><code>7 * * * *</code> cleanup: tus older than 48 h, OTPs, sessions, log rotation</li>
-      <li><code>23 3 * * *</code> storage-stats into app_settings</li>
+      <li><code>23 3 * * *</code> storage-stats into app_settings (also after worker passes, at most every 15 min)</li>
       <li><code>41 3 * * *</code> pg_dump backup</li>
-      <li><code>*/10 * * * *</code> health: curl /api/health, mail an admin after 3 failures</li>
+      <li><code>*/10 * * * *</code> health: curl /api/health, mail an admin after 3 failures, or when the worker hasn't checked in for 10 min</li>
     </ul>
   </section>
 </div>
@@ -207,7 +209,7 @@ Everything except the users' browsers and their mail servers runs inside one Cag
 
 <Callout id="deploy-decision" tone="decision">
 
-**Recommended (needs your call, see Open Questions): build on the laptop and ship artifacts with rsync.** The handoff's §13 says to build on the server; this plan recommends the reverse.
+**Settled: build on the laptop and ship artifacts with rsync.** The handoff's §13 says to build on the server; the app does the reverse.
 - The API, worker and migrator are each bundled with esbuild into a single file, with only `pg` and `sodium-native` left external.
 - The build emits a **generated minimal `package.json` and lockfile** with just those two dependencies, so the server's `node_modules` holds a few hundred files. Installing the whole workspace would pull in React, hls.js and Uppy, about 30,000 files.
 - A build on the laptop can't fight live traffic for CPU, threads or the 4 GB of memory.
@@ -216,9 +218,10 @@ Everything except the users' browsers and their mail servers runs inside one Cag
 1. `npm run build`.
 2. `rsync` to `releases/<sha>`.
 3. `npm ci` of the minimal manifest, run in the cPanel Node 24 venv so `sodium-native` picks its linux-x64 prebuild.
-4. `node migrate.js` (bundled migrator).
-5. Flip the `current` symlink, then `touch tmp/restart.txt`.
-6. `curl /api/health` until the new release's sha appears.
+4. Only when `py/` or the gate changed (hash in `shared/.py-hash`): rebuild the worker venv, scorer weights and tone-curve gate at low priority (nice 19, ionice -c3), with pinned versions and no `pip --upgrade`.
+5. `node migrate.js` (bundled migrator).
+6. Flip the `current` symlink, then restart the app process (see `docs/ops.md`).
+7. `curl /api/health` until the new release's sha appears.
 
 Migrations are **additive only** (expand, then contract in a later release), because they run while the old code is still serving and rollback only re-points the symlink. Passenger is pinned to **one application process**: tus's default locker and the rate-limit counters are in memory. Which directive CloudLinux allows in `.htaccess` (`PassengerMaxInstances 1` or the app-level pool setting) is checked in Milestone 0. Running more processes later would need a Postgres advisory-lock tus locker and a Postgres-backed rate-limit store.
 
@@ -235,8 +238,8 @@ Migrations are **additive only** (expand, then contract in a later release), bec
     <div class="stack">
       <div class="diagram-box">routes/ <small>React Router; one file per screen; guards by role</small></div>
       <div class="diagram-box">screens/ <small>presentational, from the Darkroom Archive artboards</small></div>
-      <div class="diagram-box">ui/ <small>Button · Chip · StatusChip · TierMarker · MediaTile · JustifiedGrid · Lightbox · Player · OtpInput · DataTable · Tabs · Confirm · Toast · Banner · Skeleton</small></div>
-      <div class="diagram-box">data/ <small>TanStack Query hooks (useEvents, useAssetStatus…); polling rules</small></div>
+      <div class="diagram-box">ui/ <small>Button · Chip · StatusChip · TierMarker · MediaTile · JustifiedGrid · Lightbox · Player · OtpInput · DataTable · Tabs · Confirm · Toast · Banner · Skeleton · useTabIndicator (one sliding tab highlight)</small></div>
+      <div class="diagram-box">data/ <small>TanStack Query hooks (useEvents, useAssetStatus…); poll every 15 s while something is unfinished</small></div>
       <div class="diagram-box">api/ <small>typed client: one function per endpoint; the only place fetch is called</small></div>
       <div class="diagram-box">styles/tokens.css <small>Darkroom Archive tokens, light and dark, RTL-safe</small></div>
     </div>
@@ -249,7 +252,7 @@ Migrations are **additive only** (expand, then contract in a later release), bec
         <span class="diagram-pill">routes/</span><span class="diagram-pill">auth/</span><span class="diagram-pill">media/</span><span class="diagram-pill">uploads/</span><span class="diagram-pill">admin/</span>
       </div>
       <div class="row">
-        <span class="diagram-pill">policy/canView</span><span class="diagram-pill">crypto/</span><span class="diagram-pill">db/</span><span class="diagram-pill">mail/</span><span class="diagram-pill">config.ts</span>
+        <span class="diagram-pill">policy/canView</span><span class="diagram-pill">crypto/</span><span class="diagram-pill">db/</span><span class="diagram-pill">mail/</span><span class="diagram-pill">lib/wake.ts</span><span class="diagram-pill">config.ts</span>
       </div>
     </section>
     <section class="diagram-panel worker" data-rough>
@@ -306,11 +309,11 @@ The handoff calls the shared package `packages/shared`; it becomes `packages/cor
 <table class="paths">
   <thead><tr><th>Path</th><th>Guard</th><th>Handler</th><th>Bytes from</th><th>Host-limit note</th></tr></thead>
   <tbody>
-    <tr><td><b>Sign-in</b><br><small>/api/auth/*</small></td><td>rate limit by email + IP</td><td>auth/otp.ts · sessions.ts</td><td>Postgres · SMTP</td><td>constant-time response for unknown emails</td></tr>
-    <tr><td><b>Browse</b><br><small>/api/events, /api/assets</small></td><td>requireUser + per-viewer SQL filter</td><td>routes/events.ts · assets.ts</td><td>Postgres</td><td>cursor pages ≤ 100</td></tr>
-    <tr><td><b>Media</b><br><small>/api/media/:id/*</small></td><td>canView → 404</td><td>media/serve.ts</td><td>~/media (plain via sendFile, .enc via decrypt stream)</td><td>Range required; immutable cache for thumbs</td></tr>
-    <tr><td><b>Upload</b><br><small>/api/uploads/*</small></td><td>requireCore + event and tier check in onIncomingRequest</td><td>@tus/server · onUploadFinish</td><td>~/media/tus → assets/</td><td>8 MiB chunks (5 MiB fallback)</td></tr>
-    <tr><td><b>Status</b><br><small>/api/uploads/mine, /api/admin/jobs</small></td><td>requireCore / requireAdmin</td><td>routes/uploads.ts · admin/jobs.ts</td><td>Postgres (jobs + eta)</td><td>polled every 5 s only while something is unfinished</td></tr>
+    <tr><td><b>Sign-in</b><br><small>/api/auth/*</small></td><td>rate limit by email (15 min and daily) + IP; core accounts only</td><td>auth/otp.ts · sessions.ts</td><td>Postgres · SMTP</td><td>constant-time response for unknown emails</td></tr>
+    <tr><td><b>Browse</b><br><small>/api/events, /api/assets</small></td><td>no sign-in: readerOf() (signed out = ANON member viewer) + per-viewer SQL filter</td><td>routes/events.ts · assets.ts</td><td>Postgres</td><td>cursor pages ≤ 100; uploader names hidden when signed out</td></tr>
+    <tr><td><b>Media</b><br><small>/api/media/:id/*</small></td><td>readerOf() + canView → 404</td><td>media/serve.ts</td><td>~/media (plain via sendFile, .enc via decrypt stream)</td><td>Range required; immutable cache for thumbs; signed-out requests count toward the global rate limit</td></tr>
+    <tr><td><b>Upload</b><br><small>/api/uploads/*</small></td><td>requireCore + event and tier check in onIncomingRequest; an upload id belongs to its uploader (anyone else 404)</td><td>@tus/server · onUploadFinish → wakeWorker</td><td>~/media/tus → assets/</td><td>8 MiB chunks (5 MiB fallback)</td></tr>
+    <tr><td><b>Status</b><br><small>/api/uploads/mine, /api/admin/jobs</small></td><td>requireCore / requireAdmin</td><td>routes/uploads.ts · admin/jobs.ts</td><td>Postgres (jobs + eta)</td><td>polled every 15 s only while something is unfinished</td></tr>
   </tbody>
 </table>
 ```
@@ -325,9 +328,9 @@ The handoff calls the shared package `packages/shared`; it becomes `packages/cor
 </Diagram>
 
 **Client IPs and rate limits behind the proxy.** Apache hands every request to Passenger from loopback, so Fastify runs with `trustProxy: '127.0.0.1'` and reads the client address from `X-Forwarded-For`. Without that, every per-IP limit would apply to the whole site, and `sessions.ip` would always be 127.0.0.1. Limits per client IP:
-- **Auth:** the handoff's numbers. request-code 3 per 15 minutes per email and 10 per hour per IP; verify 20 per 15 minutes per IP.
+- **Auth:** the handoff's numbers plus a daily cap. request-code 3 per 15 minutes and 10 per day per email (at most 50 guesses a day for one address, however many IPs try) and 10 per hour per IP; verify 20 per 15 minutes per IP.
 - **Global:** 600 requests per minute for `/api/*`, which absorbs a whole campus room behind one NAT address.
-- **Exempt from the global limit:** `/api/media/*` and `/api/uploads/*`. HLS byte ranges and 8 MiB PATCHes would otherwise use it up, and both routes are already authenticated.
+- **Exempt from the global limit:** `/api/uploads/*` (core only), and `/api/media/*` for signed-in viewers. HLS byte ranges and 8 MiB PATCHes would otherwise use it up. Media is public for the member tier, so signed-out media requests share the global per-IP limit.
 
 ## Low-level design
 
@@ -346,7 +349,7 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
       { name: "id", type: "uuid (v7, app)", pk: true },
       { name: "email", type: "text unique · check (email = lower(email))" },
       { name: "name", type: "text" },
-      { name: "role", type: "text check member|core" },
+      { name: "role", type: "text check member|core · new accounts always core; member only on old rows, which can't sign in" },
       { name: "is_admin", type: "bool · check (not is_admin or role='core')" },
       { name: "status", type: "text check active|disabled" },
       { name: "created_by", type: "uuid", fk: "users.id", nullable: true },
@@ -405,7 +408,7 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
     { id: "renditions", name: "renditions", fields: [
       { name: "id", type: "uuid", pk: true },
       { name: "asset_id", type: "uuid", fk: "assets.id" },
-      { name: "kind", type: "text check image_view|image_thumb|image_jpeg|video_poster|hls_master|hls_variant" },
+      { name: "kind", type: "text check image_view|image_thumb|image_jpeg|video_poster|hls_master|hls_variant · image_jpeg only on old rows" },
       { name: "label", type: "text (360p|720p|1080p)", nullable: true },
       { name: "width · height · bandwidth · bytes", type: "int · bigint" },
       { name: "rel_path", type: "text" },
@@ -474,7 +477,7 @@ Indexes that matter for the hot paths:
 
 Delete behaviour and per-viewer fields:
 - **Foreign keys.** `events.cover_asset_id`, `assets.duplicate_of` and `jobs.asset_id` are `ON DELETE SET NULL`, so a purge job can delete its asset row without cascading into its own job row. `renditions`, `processing_runs` and `asset_keys` cascade.
-- **Event covers.** A cover is resolved per viewer. If the chosen cover isn't visible to this viewer (core tier, or unfinished), the first visible photo is used instead.
+- **Event covers.** A cover is resolved per viewer. If the chosen cover isn't visible to this viewer (core tier, or unfinished), the first visible photo is used instead, and `coverAssetId` is returned only when the viewer can see it, so a hidden core cover never reveals that the item exists. Core members set a cover with "Use as event cover" in the viewer.
 - **Core-content marker.** `GET /events` returns `hasCoreContent` only to core viewers, for the design's core-only marker.
 
 
@@ -486,23 +489,26 @@ Every media route, asset read and HLS key request goes through one pure function
 - Thumbnails, view copies, posters, HLS and the key need `full`.
 - Lists and `/assets/:id` need at least `status`.
 
-Anything below the route's minimum is **404**, never 403. The design repeats this rule: members never learn that core items exist.
+Anything below the route's minimum is **404**, never 403. The design repeats this rule: signed-out visitors never learn that core items exist.
+
+Read routes need no sign-in. `readerOf()` in `apps/api/src/auth/plugin.ts` turns a request without a session into `ANON`, an active member-role viewer that matches no uploader, so member-tier items are public and everything else follows the same table. Account, upload and admin routes still need a core session. There are no member accounts any more: every account is core, admin is a flag on top, and an old member row can't sign in.
 
 <Table
   id="canview-matrix"
-  columns={["Asset state", "Member", "Core (not uploader)", "Core uploader", "Admin"]}
+  columns={["Asset state", "Signed out (ANON)", "Core (not uploader)", "Core uploader", "Admin"]}
   rows={[
     ["member tier · ready", "view", "view", "view", "view"],
     ["core tier · ready", "404", "view", "view", "view"],
-    ["original_only, member tier (core tier: members 404)", "listed as an Original-only tile · download only", "same", "same", "same"],
+    ["original_only, member tier (core tier: signed out 404)", "listed as an Original-only tile · download only", "same", "same", "same"],
     ["uploading / queued / processing / failed / needs_review", "404 (omitted)", "404 (omitted)", "status tile, no bytes", "status tile, no bytes"],
     ["ready, with a re-process or retier job running", "view (old outputs until the swap)", "view", "view + processing badge", "view + processing badge"],
     ["deleting or soft-deleted, or event deleted", "404", "404", "404", "404"],
-    ["any, user disabled or no session", "401 (no session survives disabling)", "401", "401", "401"],
+    ["any, user disabled (their sessions are deleted)", "reads as signed out", "reads as signed out", "reads as signed out", "reads as signed out"],
+    ["account, upload or admin route without a session", "401", "—", "—", "—"],
   ]}
 />
 
-The test suite enumerates every role × tier × status × deleted combination (4 × 2 × 8 × 2 = 128 cases) against this table, as the handoff's security checklist requires.
+Signed-out visitors also never see uploader names. The test suite enumerates every role × tier × status × deleted combination (4 × 2 × 8 × 2 = 128 cases) against this table, as the handoff's security checklist requires.
 
 ### Asset lifecycle
 
@@ -529,9 +535,9 @@ The test suite enumerates every role × tier × status × deleted combination (4
   deleting --> [*]: purge job removes files + rows`}
 />
 
-- **Upload rows exist from the start.** `onUploadCreate` inserts the `uploading` row, keyed by the tus id in `assets.upload_id`, so My uploads and the "Resume N unfinished uploads" banner come from the server instead of one browser's localStorage. The hourly cleanup deletes `uploading` rows and their tus files after 48 hours.
+- **Upload rows exist from the start.** `onUploadCreate` inserts the `uploading` row, keyed by the tus id in `assets.upload_id`, so My uploads and the "Resume N unfinished uploads" banner come from the server instead of one browser's localStorage. Each chunk marks the row alive; one untouched for an hour stops counting as active. The hourly cleanup deletes `uploading` rows and their tus files after 48 hours.
 - **Ready items stay ready during re-processing.** Re-processing, a curve override or a tier change never takes a ready item offline. The job writes into a fresh output directory (`r{rev}/` under the asset directory), then swaps the rendition rows and bumps `rendition_rev` in one transaction, then deletes the old directory. Viewers keep playing the old outputs until the swap. Core members and admins see a "processing" badge, derived from the job, while it runs.
-- **Tier changes take effect at once.** A member → core change hides the item from members immediately, because `access()` reads the tier, not the files.
+- **Tier changes take effect at once.** A member → core change hides the item from signed-out visitors immediately, because `access()` reads the tier, not the files.
 - **What "Process anyway" does depends on the review reason:**
   - Log or unknown-transfer video: encode as SDR with bt709 tags and no tone mapping. The admin can re-process with a curve afterwards.
   - True-HDR still: Pillow converts it to 8-bit sRGB with clipping.
@@ -549,12 +555,12 @@ The test suite enumerates every role × tier × status × deleted combination (4
   participant D as Postgres
   participant M as SMTP
   B->>A: POST request-code {email} + X-Requested-With
-  A->>A: rate limit 3/15 min per email, 10/h per IP (429 retry_after)
+  A->>A: rate limit 3/15 min and 10/day per email, 10/h per IP (429 retry_after)
   A->>D: invalidate older unconsumed codes for this email
-  alt active user
+  alt active core account
     A->>D: insert code_hash = HMAC(pepper, email:code), expires +10 min
-    A->>M: send code (text + HTML), async after response
-  else unknown or disabled
+    A->>M: send "ACM Library" code mail (text + HTML), async after response
+  else unknown, disabled or old member row
     A->>D: insert decoy row (random hash, same expiry), so verify behaves identically
   end
   A->>A: pad to the same floor (≈ 350 ms)
@@ -565,17 +571,19 @@ The test suite enumerates every role × tier × status × deleted combination (4
   alt attempts > 5
     A-->>B: 429 too_many_attempts (code invalidated)
   else timingSafeEqual(HMAC) ok and user still active
-    A->>D: consumed_at = now, insert session sha256(token), last_login_at
+    A->>D: consumed_at = now, delete the browser's old session, audit auth.login
+    A->>D: insert session sha256(token), last_login_at
     A-->>B: 200 Me + Set-Cookie sid (HttpOnly Secure SameSite=Lax, 30 d)
     B->>B: redirect to ?next= (or /)
   else mismatch / expired
+    A->>A: log otp_fail (reason and IP, never the code or email)
     A-->>B: 400 wrong_code {attemptsLeft} | expired_code
   end`}
 />
 
-Unknown and disabled emails get a decoy code row. Without it, an unknown email could only ever return "expired" from verify, never "wrong code, 3 attempts left", and that difference would reveal who is registered. A decoy can never verify, because its hash matches no code and verify also re-checks `status = 'active'`.
+Unknown and disabled emails, and old member rows (only core accounts sign in), get a decoy code row. Without it, an unknown email could only ever return "expired" from verify, never "wrong code, 3 attempts left", and that difference would reveal who is registered. A decoy can never verify, because its hash matches no code and verify also re-checks `status = 'active'`.
 
-Sessions slide: each authenticated request refreshes `expires_at` at most once an hour and `last_seen_at` at most every 5 minutes, so reads don't turn into a write per request. Logging out deletes one session row. "Sign out of all devices", and disabling a user, delete all of that user's rows.
+Sessions slide: each authenticated request refreshes `expires_at` at most once an hour and `last_seen_at` at most every 5 minutes, so reads don't turn into a write per request. Signing in drops any session the browser already held (another user on a shared PC). Logging out deletes one session row. "Sign out of all devices", and disabling a user, delete all of that user's rows.
 
 ### Resumable upload
 
@@ -589,7 +597,7 @@ Sessions slide: each authenticated request refreshes `expires_at` at most once a
   participant F as ~/media/tus
   participant D as Postgres
   U->>T: POST (Upload-Length, metadata eventId, tier, filename, filetype)
-  T->>T: onIncomingRequest: requireCore, event exists, tier allowed, size ≤ 20 GiB
+  T->>T: onIncomingRequest: requireCore, event exists, tier allowed, size ≤ 20 GiB, an existing id must be the caller's (else 404)
   T->>F: create <id> + <id>.json
   T->>D: onUploadCreate: insert asset (uploading, upload_id = <id>)
   T-->>U: 201 Location /api/uploads/<id>
@@ -602,8 +610,9 @@ Sessions slide: each authenticated request refreshes `expires_at` at most once a
   T->>T: onUploadFinish: sniff first 4 KB (magic bytes) · ffprobe or image header (≤ 15 s, nice, 1 thread)
   T->>F: rename to assets/ab/<asset>/original.<ext>, delete tus files
   T->>D: asset → queued with duration, hdr, width, height · process job, one transaction
+  T->>T: wakeWorker: spawn WORKER_WAKE (flock -w 20) in its own process group
   T-->>U: final 204 + header Asset-Id
-  U->>U: done screen with ETA from GET /api/uploads/mine
+  U->>U: done screen with ETA from GET /api/uploads/mine (or waiting to start / stalled)
   Note over U,T: lost final response → HEAD/PATCH on a finished id is answered from assets.upload_id (Upload-Offset = Upload-Length, Asset-Id)`}
 />
 
@@ -619,19 +628,24 @@ SHA-256 is the worker's first step for every job. A match within the same event 
 
 **Resume on phones.** Re-picking from the iOS photo library can change a file's name and `lastModified`, which defeats Uppy's fingerprint. So the resume banner matches re-picked files to the event's `uploading` rows by original filename and size, and continues with that row's tus id. The file input's `accept` lists `image/heic` and `video/quicktime`, so iOS sends originals instead of transcoding them. Milestone 4 checks this on a real iPhone: originals must arrive byte-identical, and HLG must survive.
 
+**Two uploads at a time, at most one video.** The host's disk IO is capped at 30 MB/s, so the client starts up to two files in parallel and never two videos at once.
+
 ### Worker runner
 
-<Diagram id="worker-loop" frame="show" caption="One cron tick of the worker (apps/worker/src/runner.ts). flock makes the runner a singleton, so any job still marked running at the start belongs to a runner that died.">
+<Diagram id="worker-loop" frame="show" caption="One tick of the worker (apps/worker/src/runner.ts), started by cron or by the API after an upload. flock makes the runner a singleton, so any job still marked running at the start belongs to a runner that died.">
 
 ```html
 <div class="wl">
   <section class="diagram-panel" data-rough>
     <p class="h"><span class="n">1</span> Start the tick</p>
     <div class="flow">
-      <div class="diagram-box">cron, every minute<small>/usr/bin/flock -n ~/tmp/acm-worker.lock node worker/run.mjs</small></div>
+      <div class="split">
+        <div class="diagram-box">cron, every 2 minutes<small>/usr/bin/flock -n ~/tmp/acm-worker.lock node worker/run.mjs · safety net for admin actions, retries, crashes</small></div>
+        <div class="diagram-box">API, right after an upload finishes<small>WORKER_WAKE: the same command with flock -w 20, in its own process group</small></div>
+      </div>
       <div class="ar">↓</div>
       <div class="split">
-        <div class="diagram-box muted">Lock held by another run<small>exit 0, nothing to do</small></div>
+        <div class="diagram-box muted">Lock held by another run<small>cron: exit 0 · wake: wait up to 20 s for an exiting worker, else the running one picks the job up</small></div>
         <div class="diagram-box">Lock acquired<small>write <code>app_settings.worker_tick</code> (health and the Admin queue read it)</small></div>
       </div>
       <div class="ar">↓</div>
@@ -652,7 +666,7 @@ SHA-256 is the worker's first step for every job. A match within the same event 
         <div class="diagram-box">retier<small>seal or unseal the files, add or drop the asset keys</small></div>
         <div class="diagram-box">purge<small>remove the asset directory and rows</small></div>
       </div>
-      <p class="diagram-muted note">While it runs: <code>jobs.step</code> and <code>progress</code> are written for the UI, and <code>jobs.state</code> is checked for cancel every 5 s.</p>
+      <p class="diagram-muted note">While it runs: <code>jobs.step</code> and <code>progress</code> are written for the UI, <code>jobs.state</code> is checked for cancel every 5 s, and <code>worker_tick</code> is beaten every minute. Children run at nice 19 under ionice -c3; the job's peak thread count goes to the worker log.</p>
       <div class="ar">↓</div>
       <div class="outcomes">
         <div class="diagram-box ok">Succeeded<small>job <code>done</code> · outputs swapped into <code>r&lt;rev&gt;/</code> · asset <code>ready</code> · ρ updated</small></div>
@@ -666,7 +680,8 @@ SHA-256 is the worker's first step for every job. A match within the same event 
 
   <section class="diagram-panel" data-rough>
     <p class="h"><span class="n">3</span> Exit</p>
-    <div class="diagram-box">Process exits, flock releases the lock<small>the next cron minute starts a fresh tick</small></div>
+    <div class="diagram-box">Re-measure storage if the pass ran jobs<small>at most every 15 min (the walk is all metadata IO)</small></div>
+    <div class="diagram-box">Process exits, flock releases the lock<small>the next cron run or upload starts a fresh tick</small></div>
   </section>
 </div>
 ```
@@ -694,7 +709,7 @@ SHA-256 is the worker's first step for every job. A match within the same event 
 
 </Diagram>
 
-Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720p") and `jobs.progress`, which ffmpeg's `-progress pipe:1` provides as `out_time_ms` ÷ duration. These are the strings the queue and My uploads screens show. A child process is killed, with its process tree, after 3 × its expected cost, with a 10-minute minimum.
+Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720p") and `jobs.progress`, which ffmpeg's `-progress pipe:1` provides as `out_time_ms` ÷ duration. These are the strings the queue and My uploads screens show. A child process is killed, with its process tree, after 3 × its expected cost, with a 10-minute minimum. Every child gets thread caps (`OMP_NUM_THREADS` and friends, and explicit `-threads` / `-filter_threads` on every ffmpeg and ffprobe call), because the host reports 64 CPUs while CloudLinux counts every thread against the account's 200 tasks.
 
 - **Queue order.** Image, retier and purge jobs get priority 100 and videos get 0, so photos are never stuck behind a two-hour recording. "Move to the top" sets a job's priority to the current maximum + 1. The ETA function walks jobs in exactly this claim order.
 - **Attempts.** A crash costs one attempt, not two. The claim increments `attempts`; the stale reset puts the job straight back in the queue without incrementing. A stale job already at `max_attempts` becomes `failed`, and so does its asset.
@@ -721,15 +736,15 @@ Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720
   <div class="lane diagram-panel" data-rough>
     <p class="h">2 · Tone curve (HDR only)</p>
     <div class="row2">
-      <div class="diagram-box">tonemap_auto = false<small>Hable fallback chain (verified on server): zscale linear npl=203 → tonemap=hable → bt709 tv</small></div>
-      <div class="diagram-box">tonemap_auto = true<small>select.py: 8 frames × 4 .cube curves → PU21 → DISTS + TOPIQ ranks → m* or fallback hable203 → lut3d tetrahedral</small></div>
+      <div class="diagram-box">tonemap_auto = false (default)<small>hable203 (verified on server): zscale linear npl=203 → tonemap=hable → bt709 tv</small></div>
+      <div class="diagram-box">tonemap_auto = true (admin checkbox; works when ticked, the validation gate is information only)<small>select.py: 8 frames × 4 .cube curves → PU21 → DISTS + TOPIQ ranks → m* or fallback hable203 → lut3d tetrahedral</small></div>
     </div>
   </div>
 
   <div class="lane diagram-panel graph" data-rough>
     <p class="h">3 · Encode and package (one ffmpeg run)</p>
     <div class="fg">
-      <div class="diagram-node">-threads 2 -i SRC</div>
+      <div class="diagram-node">-filter_threads 1 -filter_complex_threads 1 -threads 1 -i SRC</div>
       <div class="ar">→</div>
       <div class="diagram-node">VF (sdr: format=yuv420p · hdr: chain or lut3d) · fps_mode cfr if VFR</div>
       <div class="ar">→</div>
@@ -739,7 +754,7 @@ Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720
         <div class="diagram-box">360p · crf 26 · max 1M/2M · aac 96k</div>
         <div class="diagram-box">720p · crf 23 · max 3M/6M · aac 128k</div>
         <div class="diagram-box">1080p · crf 22 · max 6M/12M · aac 128k</div>
-        <small class="diagram-muted">rungs above the source's short side are dropped; at least one kept · portrait scales width</small>
+        <small class="diagram-muted">libx264 -threads 1 per rung (3 rungs ≈ 3 cores, the API keeps the 4th) · rungs above the source's short side are dropped; at least one kept · portrait scales width</small>
       </div>
       <div class="ar">→</div>
       <div class="diagram-box out">hls/master.m3u8<br>hls/&lt;rung&gt;/index.m3u8 + data.ts<small>single_file · hls_time 6 · GOP 2 s · bt709 tags · core: AES-128 via ~/keys keyinfo</small></div>
@@ -774,7 +789,7 @@ Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720
 
 **Outputs are versioned.** Every run writes into `assets/ab/<id>/r<rev>/` (`hls/`, `poster`, `thumb`). Finalize swaps the `renditions` rows and `rendition_rev` in one transaction and only then deletes the previous `r<rev>/`, so playback never sees a half-written ladder.
 
-**Sampled frames.** When automatic selection runs, `select.py` also writes its 8 sampled frames as small WebPs (long edge 320) into `runs/<run_id>/`. Only the newest run's frames are kept. For core assets they are sealed as `.enc`, like every other core output, and `/admin/assets/:id/frames/:n` serves them through the same decryptor. With `tonemap_auto=false` there are no scores or frames, and Item details shows a "Fallback curve, no scores" state instead.
+**Sampled frames.** When automatic selection runs, `select.py` also writes its 8 sampled frames as small WebPs (long edge 320) into `runs/<run_id>/`. Only the newest run's frames are kept. For core assets they are sealed as `.enc`, like every other core output, and `/admin/assets/:id/frames/:n` serves them through the same decryptor. With `tonemap_auto=false` (the default) there are no scores or frames, and Item details shows a "Fallback curve, no scores" state instead.
 
 **File count per video** is about 2R + 3. A three-rung video costs 1 original, 1 master playlist, 3 variant playlists, 3 `data.ts` files, 1 poster and 1 thumb: 10 files whatever the length. Single-file mode combined with `-hls_key_info_file` is Milestone 0 spike 1. If hls.js won't play that combination, the fallback is normal 10-second segments, and the result goes in `docs/decisions/hls-packaging.md`.
 
@@ -865,7 +880,7 @@ Each step writes `jobs.step` (for example "Scoring tone curves" or "Encoding 720
   Note over P: Auto shows the current level; manual picker lists only existing levels`}
 />
 
-Member-tier videos take the same path without the key hop. Images and posters are served from `/api/media/:id/{thumb,view,poster}?v=<rendition_rev>` with `Cache-Control: private, max-age=31536000, immutable`, so scrolling back through a grid costs no requests. The version is the asset's `rendition_rev`, not the global settings version, so a curve override or a new cover is visible straight away.
+Member-tier videos take the same path without the key hop, and need no session. Images and posters are served from `/api/media/:id/{thumb,view,poster}?v=<rendition_rev>` with `Cache-Control: private, max-age=31536000, immutable`, so scrolling back through a grid costs no requests. The version is the asset's `rendition_rev`, not the global settings version, so a curve override or a new cover is visible straight away.
 
 ### ETA
 
@@ -875,10 +890,15 @@ The handoff's formula is implemented once in `packages/core/eta.ts` and used by 
   id="eta-code"
   filename="packages/core/src/eta.ts"
   language="ts"
-  code={"export type EtaJob = { kind: 'image' | 'video'; hdr: 'sdr' | 'hlg' | 'pq' | 'unknown' | null; durationS: number | null; progress: number | null };\n\nexport function jobCost(j: EtaJob, rho: { sdr: number; hdr: number }): number {\n  if (j.kind === 'image') return 3;\n  const d = j.durationS ?? 0;\n  return j.hdr === 'hlg' || j.hdr === 'pq' ? rho.hdr * d + 60 : rho.sdr * d;\n}\n\n/** Seconds until each job finishes, in queue order (running job first, scaled by its remaining progress). */\nexport function queueEtas(ordered: EtaJob[], rho: { sdr: number; hdr: number }): number[] {\n  let t = 0;\n  return ordered.map((j) => (t += jobCost(j, rho) * (1 - (j.progress ?? 0))));\n}\n"}
+  code={"export type Rho = { sdr: number; hdr: number; hdrFixed?: number };\nexport const DEFAULT_RHO: Rho = { sdr: 0.6, hdr: 1.2 };\nexport const RHO_RANGE = [0.3, 3] as const;   // learned rho stays in these bounds\nexport const SCORE_RANGE = [60, 900] as const; // learned score_seconds too\n\nexport function jobCost(j: EtaJob, rho: Rho): number {\n  if (j.kind === 'image') return IMAGE_SECONDS;\n  const d = j.durationS ?? 0;\n  return isHdr(j.hdr) ? rho.hdr * d + (rho.hdrFixed ?? HDR_FIXED_SECONDS) : rho.sdr * d;\n}\n\n/** Seconds until each job finishes, in claim order (running job first, scaled by its remaining progress). */\nexport function queueEtas(ordered: EtaJob[], rho: Rho): number[] {\n  let t = 0;\n  return ordered.map((j) => (t += jobCost(j, rho) * (1 - clamp01(j.progress ?? 0))));\n}\n\nexport function nextRho(current: number, encodeS: number, durationS: number): number {\n  if (!(durationS > 0) || !(encodeS >= 0)) return current;\n  return clamp(RHO_RANGE, (1 - RHO_ALPHA) * current + RHO_ALPHA * (encodeS / durationS));\n}\n"}
 />
 
-After each video job, the worker updates `rho_sdr` or `rho_hdr` in `app_settings` with an exponential moving average (α = 0.2) of measured *encode* time ÷ duration. Scoring time is excluded, because the fixed 60 seconds already covers it. Over time the estimates track the real host. Jobs are summed in claim order (priority, then age), the same order the worker uses.
+After each video job, the worker updates `rho_sdr` or `rho_hdr` in `app_settings` with an exponential moving average (α = 0.2) of measured *encode* time ÷ duration, clamped to [0.3, 3]. Scoring time is excluded: the HDR fixed cost covers it, and when automatic selection runs it is a learned `score_seconds`, clamped to [60, 900]. The clamps stop one throttled or odd run from inflating (or zeroing) every later ETA. Jobs are summed in claim order (priority, then age), the same order the worker uses.
+
+What the API (`apps/api/src/lib/queue.ts`) does with the numbers:
+- **Purges** and jobs **waiting out a retry backoff** are left out of the sum; a job in backoff has no ETA.
+- **Stale worker.** When the worker heartbeat (`worker_tick`) is older than 5 minutes, every ETA is null and the UI says "Waiting for the processor" instead of a clock that keeps sliding. The worker beats every minute, during long jobs too.
+- **Upload screen.** It shows "waiting to start" or "stalled" instead of a huge time.
 
 ### HTTP API
 
@@ -888,21 +908,21 @@ All routes live under `/api`. Errors are `{error, message}`, and pagination uses
   id="api-table"
   columns={["Method", "Path", "Role", "Screen that calls it"]}
   rows={[
-    ["POST", "/auth/request-code · /auth/verify", "public", "Login (email, code)"],
+    ["POST", "/auth/request-code · /auth/verify", "public (only core accounts get a code)", "Login (email, code)"],
     ["POST", "/auth/logout · /auth/logout-all", "user", "Account"],
     ["GET / PATCH", "/me", "user", "App shell, Account"],
-    ["GET", "/events?q=&year=&hasVideos=&cursor=", "user", "Library"],
-    ["POST / PATCH / DELETE", "/events · /events/:id", "core · core · admin", "Upload step 1, Event edit"],
-    ["GET", "/events/:idOrSlug · /events/:id/assets?kind=&tier=&cursor=", "user", "Event page"],
-    ["GET / PATCH / DELETE", "/assets/:id", "user · core own or admin · admin", "Viewer, Player, Item details"],
-    ["GET", "/media/:id/thumb|view|poster|original", "canView", "Grids, Viewer, Download original"],
-    ["GET", "/media/:id/hls/master.m3u8 · :variant/index.m3u8 · :variant/data.ts · hls/key", "canView", "Player"],
+    ["GET", "/events?q=&year=&hasVideos=&cursor=", "anyone (signed out = ANON)", "Library"],
+    ["POST / PATCH / DELETE", "/events · /events/:id", "core · core · admin", "Upload step 1; Edit event (event page, Admin › Events), Use as event cover (viewer); Delete event (admin)"],
+    ["GET", "/events/:idOrSlug · /events/:id/assets?kind=&tier=&cursor=", "anyone (signed out = ANON)", "Event page"],
+    ["GET / PATCH / DELETE", "/assets/:id", "anyone · core own or admin · admin", "Viewer, Player, Item details"],
+    ["GET", "/media/:id/thumb|view|poster|original", "canView (member tier public)", "Grids, Viewer, Download original"],
+    ["GET", "/media/:id/hls/master.m3u8 · :variant/index.m3u8 · :variant/data.ts · hls/key", "canView (member tier public)", "Player"],
     ["ALL", "/uploads/* (tus)", "core", "Upload"],
     ["GET", "/uploads/mine?cursor=", "core", "My uploads, resume banner, shell processing indicator"],
     ["POST", "/uploads/:assetId/retry", "core (own)", "My uploads (Retry)"],
     ["GET / POST", "/admin/users · /admin/users/bulk", "admin", "Admin · Members"],
     ["PATCH", "/admin/users/:id", "admin", "Admin · Members"],
-    ["GET", "/admin/jobs?tab=running|queued|failed|needs_review|recent (includes queue summary)", "admin", "Admin · Processing queue"],
+    ["GET", "/admin/jobs?tab=running|queued|failed|needs_review|recent (includes queue summary; purge jobs and deleted items are hidden from every tab and count)", "admin", "Admin · Processing queue"],
     ["POST", "/admin/jobs/:id/retry · /cancel · /prioritize", "admin", "Queue (Retry, Move to the top)"],
     ["GET", "/admin/assets/:id/processing · /frames/:n", "admin", "Admin · Item details"],
     ["POST", "/admin/assets/:id/reprocess · /resolve", "admin", "Item details, Needs review"],
@@ -920,9 +940,10 @@ Endpoints and parameters this plan adds or changes:
   - `failed` → `state = failed`;
   - `needs_review` → the asset's status, joined with its job (whose `outcome` is `needs_review`);
   - `recent` → `state = done`, last 7 days.
-- **Settings guard.** `PATCH /admin/settings` refuses `tonemap_auto = true` until the validation gate's marker file exists in the release.
+- **Automatic tone curves.** `PATCH /admin/settings` accepts `tonemap_auto` either way, and the worker uses automatic selection whenever it is on. The validation gate's result (`gate-passed.json`) is shown next to the checkbox as information only.
 - **Audit coverage.** Every admin mutation, every tier change (including a core member changing the tier of their own upload) and every delete writes `audit_log`.
-- **Last-admin guard.** It runs under `SELECT … FOR UPDATE` on the admin rows, so two admins can't demote each other at the same moment. Demoting a core admin to member clears `is_admin` in the same statement.
+- **Accounts.** `POST /admin/users` and `/admin/users/bulk` take `isAdmin`, not a role: every new account is core. Editing an old member row makes it core, so the admin flag is always valid.
+- **Last-admin guard.** It runs under `SELECT … FOR UPDATE` on the admin rows, so two admins can't demote each other at the same moment.
 
 **Errors.** Every error code comes from one `ErrorCode` union in `packages/core`. Field names are camelCase, except the handoff's mandated `retry_after`, which also goes out as a `Retry-After` header. tus errors use the same JSON body.
 
@@ -932,7 +953,7 @@ The three contracts that are hardest to change once clients depend on them:
   { "name": "email", "in": "body", "type": "string", "required": true, "description": "Lower-cased by the server." },
   { "name": "code", "in": "body", "type": "string", "required": true, "description": "Exactly 6 digits." }
 ]} request={{ "contentType": "application/json", "example": "{ \"email\": \"sara@qu.edu.qa\", \"code\": \"042917\" }" }} responses={[
-  { "status": "200", "description": "Signed in; Set-Cookie sid", "example": "{ \"id\": \"0192f0c8-…\", \"email\": \"sara@qu.edu.qa\", \"name\": \"Sara\", \"role\": \"member\", \"isAdmin\": false }" },
+  { "status": "200", "description": "Signed in; Set-Cookie sid", "example": "{ \"id\": \"0192f0c8-…\", \"email\": \"sara@qu.edu.qa\", \"name\": \"Sara\", \"role\": \"core\", \"isAdmin\": false }" },
   { "status": "400", "description": "wrong_code with attempts left, or expired_code", "example": "{ \"error\": \"wrong_code\", \"message\": \"That code isn't right.\", \"attemptsLeft\": 3 }" },
   { "status": "429", "description": "too_many_attempts (code invalidated; no retry_after) or rate_limited (retry_after seconds + Retry-After header)", "example": "{ \"error\": \"rate_limited\", \"message\": \"Try again in 12 minutes.\", \"retry_after\": 720 }" }
 ]}>
@@ -941,9 +962,9 @@ The Login screen's code states (wrong code with attempts left, expired, too many
 
 </Endpoint>
 
-<Endpoint id="ep-assets" method="GET" path="/api/events/{id}/assets" summary="Media grid for one event, filtered per viewer" auth="session cookie" params={[
+<Endpoint id="ep-assets" method="GET" path="/api/events/{id}/assets" summary="Media grid for one event, filtered per viewer" auth="none (signed out reads as ANON); session cookie for core" params={[
   { "name": "kind", "in": "query", "type": "image | video" },
-  { "name": "tier", "in": "query", "type": "member | core", "description": "Ignored for members." },
+  { "name": "tier", "in": "query", "type": "member | core", "description": "Ignored for signed-out visitors." },
   { "name": "cursor", "in": "query", "type": "string" },
   { "name": "limit", "in": "query", "type": "int ≤ 100" }
 ]} responses={[
@@ -951,11 +972,11 @@ The Login screen's code states (wrong code with attempts left, expired, too many
   { "status": "404", "description": "Event missing or deleted" }
 ]}>
 
-`width` and `height` come from the ingest probe, so they're present from `queued` onward. The justified grid can lay out rows before the thumbnails load; a still-`uploading` tile uses a 4:3 placeholder. Members get only `ready` member-tier items. Core members also get their own unfinished uploads; admins get everyone's.
+`width` and `height` come from the ingest probe, so they're present from `queued` onward. The justified grid can lay out rows before the thumbnails load; a still-`uploading` tile uses a 4:3 placeholder. Signed-out visitors get only `ready` (and `original_only`) member-tier items, without uploader names. Core members also get their own unfinished uploads; admins get everyone's.
 
 </Endpoint>
 
-<Endpoint id="ep-original" method="GET" path="/api/media/{id}/original" summary="Download the original, plain or decrypted on the fly" auth="session cookie + canView" params={[
+<Endpoint id="ep-original" method="GET" path="/api/media/{id}/original" summary="Download the original, plain or decrypted on the fly" auth="canView (member tier public; core tier needs a session)" params={[
   { "name": "Range", "in": "header", "type": "bytes=a-b" }
 ]} responses={[
   { "status": "200", "description": "Whole file; Content-Disposition attachment; filename*=UTF-8''IMG_4515.MOV" },
@@ -963,7 +984,7 @@ The Login screen's code states (wrong code with attempts left, expired, too many
   { "status": "404", "description": "Missing or not visible to this user (same response)" }
 ]}>
 
-For an `.enc` file, the response body comes from the chunk-range decryptor shown above. The client can't tell a plain file from an encrypted one.
+For an `.enc` file, the response body comes from the chunk-range decryptor shown above. The client can't tell a plain file from an encrypted one. This is the only photo download: there is no JPEG copy.
 
 </Endpoint>
 
@@ -978,7 +999,7 @@ For an `.enc` file, the response body comes from the chunk-range decryptor shown
         filename: "apps/api/src/policy/canView.ts", language: "ts",
         code: "import type { Asset, Viewer } from '@acm/core/schemas';\n\nexport const LEVELS = ['none', 'status', 'download', 'full'] as const;\nexport type Access = (typeof LEVELS)[number];\n\nexport function access(v: Viewer | null, a: Asset, eventDeleted: boolean): Access {\n  if (!v || v.status !== 'active') return 'none';\n  if (a.deletedAt || eventDeleted || a.status === 'deleting') return 'none';\n  if (a.tier === 'core' && v.role !== 'core') return 'none';\n  if (a.status === 'ready') return 'full';\n  if (a.status === 'original_only') return 'download';\n  const ownsOrAdmin = v.isAdmin || a.uploaderId === v.id;\n  return ownsOrAdmin ? 'status' : 'none';\n}\n\n/** Route guard: anything below `min` becomes a 404. */\nexport const atLeast = (have: Access, min: Access) => LEVELS.indexOf(have) >= LEVELS.indexOf(min);\n",
         annotations: [
-          { lines: "7-9", label: "404 first", note: "Disabled users, deleted rows and core tier for members all collapse to 'none'. Routes map anything below their minimum to 404, never to 403." },
+          { lines: "7-9", label: "404 first", note: "Disabled users, deleted rows and core tier for signed-out visitors (ANON, role member, from readerOf()) all collapse to 'none'. Routes map anything below their minimum to 404, never to 403." },
           { lines: "11", label: "Original only", note: "Downloadable and listed, but not streamable: /original needs 'download'; thumb, view, HLS and key need 'full'." },
           { lines: "12-13", label: "Status tiles", note: "Unfinished items are visible as status only, to their uploader and to admins. No media bytes." }
         ] } }
@@ -1007,11 +1028,11 @@ For an `.enc` file, the response body comes from the chunk-range decryptor shown
     { id: "kf-client", label: "web/api + data", blocks: [
       { id: "kf-client-code", type: "annotated-code", data: {
         filename: "apps/web/src/api/client.ts · apps/web/src/data/uploads.ts", language: "ts",
-        code: "// api/client.ts\nexport async function call<T>(schema: z.ZodType<T>, path: string, init: RequestInit = {}): Promise<T> {\n  const res = await fetch(`/api${path}`, { ...init, headers: { 'X-Requested-With': 'acm-media', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } });\n  if (res.status === 401) throw new SessionExpired(location.pathname + location.search);\n  if (!res.ok) throw ApiError.from(await res.json().catch(() => ({})), res.status);\n  return res.status === 204 ? (undefined as T) : schema.parse(await res.json());\n}\nexport const getMyUploads = (cursor?: string) => call(MyUploadsPage, `/uploads/mine${q({ cursor })}`);\n\n// data/uploads.ts\nexport function useMyUploads() {\n  return useInfiniteQuery({\n    queryKey: ['uploads', 'mine'],\n    queryFn: ({ pageParam }) => getMyUploads(pageParam),\n    getNextPageParam: (p) => p.nextCursor ?? undefined,\n    refetchInterval: (q) => (q.state.data?.pages.some((p) => p.items.some(isUnfinished)) ? 5000 : false),\n  });\n}\n",
+        code: "// api/client.ts\nexport async function call<T>(schema: z.ZodType<T>, path: string, init: RequestInit = {}): Promise<T> {\n  const res = await fetch(`/api${path}`, { ...init, headers: { 'X-Requested-With': 'acm-media', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } });\n  if (res.status === 401) throw new SessionExpired(location.pathname + location.search);\n  if (!res.ok) throw ApiError.from(await res.json().catch(() => ({})), res.status);\n  return res.status === 204 ? (undefined as T) : schema.parse(await res.json());\n}\nexport const getMyUploads = (cursor?: string) => call(MyUploadsPage, `/uploads/mine${q({ cursor })}`);\n\n// data/uploads.ts\nexport function useMyUploads() {\n  return useInfiniteQuery({\n    queryKey: ['uploads', 'mine'],\n    queryFn: ({ pageParam }) => getMyUploads(pageParam),\n    getNextPageParam: (p) => p.nextCursor ?? undefined,\n    refetchInterval: (q) => (q.state.data?.pages.some((p) => p.items.some(isUnfinished)) ? 15_000 : false),\n  });\n}\n",
         annotations: [
           { lines: "4", label: "Session expired", note: "A 401 anywhere opens the design's session-expired state and returns to the same page after sign-in." },
           { lines: "6", note: "Responses are parsed with the same zod schemas the API uses to serialize them." },
-          { lines: "16", label: "Polling", note: "Polls every 5 s only while something is unfinished, which keeps entry processes low." }
+          { lines: "16", label: "Polling", note: "Polls every 15 s only while something is unfinished, which keeps entry processes low." }
         ] } }
     ]}
   ]}
@@ -1022,8 +1043,10 @@ For an `.enc` file, the response body comes from the chunk-range decryptor shown
 - **Headers (Helmet):**
   - CSP: `default-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; img-src 'self' blob: data:; font-src 'self'; style-src 'self'; frame-ancestors 'none'`. hls.js needs `blob:` for MediaSource and its worker.
   - `Referrer-Policy: same-origin`.
-  - HSTS, added once AutoSSL is confirmed.
-- **Log redaction.** The pino redaction paths cover `req.headers.cookie`, `set-cookie`, `body.code`, `body.email` on auth routes, and every key-bearing field. The worker never logs `params` that carry key paths.
+  - HSTS on.
+- **Log redaction.** The pino redaction paths cover `req.headers.cookie`, `set-cookie`, `body.code`, `body.email` on auth routes, and every key-bearing field. The worker never logs `params` that carry key paths. In production the API logs to `LOG_FILE`, because lsnode drops the app's stdout.
+- **Sign-in hardening.** A daily per-email code limit on top of the 15-minute one; the browser's old session is dropped on sign-in; rejected codes are logged as `otp_fail` (reason and IP only); every sign-in writes an `auth.login` audit row.
+- **Ownership and leaks.** A tus upload id belongs to its uploader (anyone else gets 404); an event's `coverAssetId` is hidden when the viewer can't see that cover; uploader names are hidden from signed-out visitors; signed-out media requests count toward the global rate limit.
 - **Secrets.** `.env.example` ships with every variable from the handoff's §12. On the server, `shared/.env` is chmod 600. `MASTER_KEY` is also kept in the chapter's password manager.
 - **Ops.** One SSH key per maintainer, cPanel 2FA, and the known Postgres 9.6 exposure, all documented in `docs/ops.md`.
 
@@ -1043,16 +1066,17 @@ The canvas's `project/app.css` already defines every token and the base componen
   columns={["Design artboard(s)", "Route", "Screen component", "Data hooks → endpoints", "Notes from the canvas"]}
   rows={[
     ["Login · PhoneLogin", "/login", "LoginScreen (EmailStep, CodeStep)", "useRequestCode, useVerify → /auth/*", "Neutral sent message; paste and auto-submit on the 6th digit; resend countdown"],
-    ["Library · PhoneLibrary", "/", "LibraryScreen", "useEvents (infinite) → /events", "Covers show the title only; year dividers; processing indicator for core"],
-    ["Event · PhoneEvent", "/events/:slug", "EventScreen + JustifiedGrid", "useEvent, useEventAssets → /events/:idOrSlug, /events/:id/assets", "Select mode with per-file downloads; tier filter for core; skeleton row while the next page loads"],
-    ["Viewer · PhoneViewer", "/p/:assetId", "Lightbox (image) over its event", "useAsset → /assets/:id; img src /media/:id/view", "Always dark; ← → I Z Esc; thumbnail first, then the view copy; HEIC adds Download as JPEG"],
+    ["Library · PhoneLibrary", "/", "LibraryScreen", "useEvents (infinite) → /events", "Open without sign-in; member tier labelled Public; covers show the title only; year dividers; processing indicator for core"],
+    ["Event · PhoneEvent", "/events/:slug", "EventScreen + JustifiedGrid", "useEvent, useEventAssets, usePatchEvent → /events/:idOrSlug, /events/:id/assets, /events/:id", "Select mode with per-file downloads; tier filter for core; Edit event (core), Delete (admin); skeleton row while the next page loads"],
+    ["Viewer · PhoneViewer", "/p/:assetId", "Lightbox (image) over its event", "useAsset → /assets/:id; img src /media/:id/view", "Always dark; ← → I Z Esc; thumbnail first, then the view copy; one Download original button; Use as event cover (core)"],
     ["Player", "/p/:assetId", "Lightbox (video) + Player over its event", "useAsset; hls.js → /media/:id/hls/*", "Space F M keys; Auto shows the current level; only existing rungs"],
     ["Upload · PhoneUpload", "/upload", "UploadScreen (ChooseEvent, AddFiles, Progress, Done)", "useCreateEvent; Uppy tus → /uploads", "Resume banner; offline auto-resume; duplicate flag; HDR-off tip"],
     ["MyUploads · PhoneMyUploads", "/uploads", "MyUploadsScreen", "useMyUploads (polling) → /uploads/mine", "Grouped by event; plain-language errors; Retry"],
-    ["AdminQueue", "/admin/queue", "QueueScreen", "useJobs(state) → /admin/jobs", "Health summary; Move to the top; Needs review actions"],
+    ["AdminQueue", "/admin/queue", "QueueScreen", "useJobs(state) → /admin/jobs", "Health summary; Move to the top; Needs review actions; purge jobs and deleted items hidden"],
     ["AdminItem", "/admin/items/:assetId", "ItemDetailsScreen", "useProcessing → /admin/assets/:id/processing, /frames/:n", "Scores table, 8 frames on a timeline, override + re-process with ETA confirm"],
-    ["AdminMembers", "/admin/members", "MembersScreen", "useUsers, useBulkAdd → /admin/users*", "Bulk paste; in-page confirms; last-admin guard"],
-    ["AdminStorage", "/admin/storage", "StorageScreen", "useStorage → /admin/storage", "Unknown limit state; growth chart"],
+    ["AdminMembers", "/admin/members", "MembersScreen", "useUsers, useBulkAdd → /admin/users*", "Roles shown as Admin / Core; Core or Admin when adding one or a list; bulk paste with a Download .xlsx template button; in-page confirms; last-admin guard"],
+    ["(no artboard)", "/admin/events", "EventsScreen", "useEvents → /events; EventEditDialog, DeleteEventConfirm → /events/:id", "Edit event and Delete event from one list"],
+    ["AdminStorage", "/admin/storage", "StorageScreen", "useStorage → /admin/storage", "Unknown limit state; growth chart; re-measured after worker passes, at most every 15 min"],
     ["Account", "/account", "AccountScreen", "useMe, useLogoutAll → /me, /auth/*", "Name editable; email read-only"],
     ["States", "(global)", "SessionExpired, NotFound, OfflineBanner, ServerError", "client.ts error mapping", "Not found covers both missing and forbidden"],
     ["Phone · Arabic boards", "(locale, later)", "same screens with dir=rtl", "—", "v1 ships English; the i18n layer and logical CSS make Arabic a translation file plus a QA pass"],
@@ -1082,7 +1106,7 @@ The canvas's `project/app.css` already defines every token and the base componen
 
 <Callout id="jpeg-decision" tone="decision">
 
-**HEIC photos also get a JPEG copy at ingest.** `images.py` writes `download.jpg` for HEIC/HEIF originals: sRGB, quality 90, EXIF orientation applied, capture date and device kept in the metadata. It is sealed as `.enc` for core assets. It is a new rendition kind `image_jpeg`, served by `GET /media/:id/jpeg` (minimum level `download`), and the viewer shows "Download as JPEG" next to "Download original · HEIC · 3.1 MB". It costs one extra file per HEIC asset and nothing at request time.
+**Photos download as the original only.** The worker no longer asks `images.py` for a JPEG copy, the `/media/:id/jpeg` route is gone, and the viewer shows a single "Download original" button. `image_jpeg` stays in the rendition-kind list only for the database CHECK and old rows.
 
 </Callout>
 
@@ -1091,6 +1115,8 @@ Interaction details the artboards imply and the code must honor:
 - **Resume after closing the tab.** The upload screen reads Uppy's stored tus fingerprints at mount. For each one, it compares `HEAD` offsets with the event's server-side assets, and shows "Resume N unfinished uploads" when any remain. Picking the same files continues from the stored offsets.
 - **Keyboard.** The lightbox traps focus. Arrow keys, I, Z and Esc are bound to the dialog element, not to `window`. Tables and tabs follow the WAI-ARIA patterns, and `prefers-reduced-motion` disables the shimmer and transitions, matching `app.css`.
 - **Alt text.** Alt text falls back to "Photo from ‹event title›, ‹date›" when there is nothing better.
+- **Loading and motion.** Every screen has a skeleton loading state and images fade in. Page entrance animates the content only: admin screens share the shell's page key, so the side nav stays still. Nav, side nav, tab bar and screen tabs use one indicator that slides to the current tab (`useTabIndicator`). All of it is off under reduced motion.
+- **Polling.** Lists that show unfinished work poll every 15 s, and only while something is unfinished.
 
 ## Milestones
 
@@ -1109,8 +1135,8 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
     { id: "m7", label: "M7 · HDR + needs review", note: "Classifier; verified Hable fallback chain; Log/unknown → needs_review; resolve endpoint; ETA with ρ EMA." },
     { id: "m8", label: "M8 · Encryption", note: "ACMENC01 seal/open + Range decryptor; key wrap; HLS AES-128 keyinfo + key route; retier and reprocess-on-tier-change; rotate-master-key script; docs/security.md." },
     { id: "m9", label: "M9 · Admin", note: "Members (bulk, last-admin guard, disable → sessions purged), Queue (tabs, summary, retry/cancel/prioritize), Item details, Storage + nightly stats, audit log." },
-    { id: "m10", label: "M10 · Tone-curve selection", note: "Install torch (CPU wheel) and pyiqa into ~/venvs/worker here and record the size and inode cost. luts.py (4 × 65³ .cube) + table-vs-zscale acceptance test (< 2 code values); select.py with PU21, DISTS, TOPIQ and sampled-frame WebPs; validation gate reproduces hable_203 first; pre-fetched weights; tonemap_auto can only be enabled after the gate passes." },
-    { id: "m11", label: "M11 · Production", note: "library.qu.acm.org + AutoSSL; Setup Node.js App; deploy.sh; crontab (worker, cleanup, stats, backup, health); docs/ops.md (EOL Postgres, no original backups, 2FA, key handling); production smoke." }
+    { id: "m10", label: "M10 · Tone-curve selection", note: "Install torch (CPU wheel) and pyiqa into ~/venvs/worker here and record the size and inode cost. luts.py (4 × 65³ .cube) + table-vs-zscale acceptance test (< 2 code values); select.py with PU21, DISTS, TOPIQ and sampled-frame WebPs; validation gate reproduces hable_203 first; pre-fetched weights; tonemap_auto is an admin checkbox (default off) that works when ticked, and the gate's result is shown as information only." },
+    { id: "m11", label: "M11 · Production", note: "library.qu.acm.org + AutoSSL; Setup Node.js App; deploy.sh (venv, weights and gate rebuilt only when py/ changes); crontab (worker every 2 min plus WORKER_WAKE after uploads, cleanup, stats, backup, health); docs/ops.md (EOL Postgres, no original backups, 2FA, key handling); production smoke." }
   ]}
 />
 
@@ -1128,7 +1154,8 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
   rows={[
     ["The cPanel Postgres is older or different than 9.6, or its pg_hba blocks TCP", "Medium", "Milestone 0 spike 1. The schema is a 9.6 subset, so any newer server works. Connect over the Unix socket if TCP is refused."],
     ["Host kills ffmpeg runs over 60 minutes under cron", "Medium", "Milestone 0 spike. If it happens, split the video job into resumable steps (probe → select → encode per rung → finalize); each step is already idempotent."],
-    ["Thread limit (200) hit by a hidden auto-threaded library", "Medium", "Caps everywhere, plus a test that counts /proc/self/task during an encode. torch.set_num_threads(2) runs before any model loads."],
+    ["Thread limit (200 tasks) hit by a hidden auto-threaded library", "Medium", "Explicit thread caps on every ffmpeg/ffprobe call and in the child environment; the HLS encode uses one thread per stage and rung; torch.set_num_threads(2) runs before any model loads; the worker logs each job's peak thread count."],
+    ["Encodes or deploys starve the API of CPU or disk (4 cores, 30 MB/s IO)", "Medium", "Worker children and deploy-time Python work run at nice 19 under ionice -c3; deploys skip the venv, weights and gate unless py/ changed; at most one video uploads at a time."],
     ["torch CPU venv is too heavy in inodes or disk", "Medium", "Installed and measured in Milestone 10. Tone-curve selection is optional; the Hable fallback ships without torch."],
     ["8 MiB request bodies rejected by Apache or Passenger", "Low", "Config flag for the chunk size; 5 MiB fallback."],
     ["OTP mail lands in spam at QU student mailboxes", "Medium", "Check SPF, DKIM and DMARC in cPanel → Email Deliverability; test both mailbox types in Milestone 2."],
@@ -1144,7 +1171,7 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
   - Sessions, sliding expiry and the CSRF header.
   - The 128-case `canView` matrix.
   - Range on plain and `.enc` files, crossing chunk boundaries and the last chunk.
-  - The HLS key route returns 404 for members.
+  - The HLS key route returns 404 for signed-out visitors.
   - tus: happy path, resume, wrong type rejected.
   - ETA math.
   - All of this runs against `postgres:9.6` in docker.
@@ -1154,17 +1181,17 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
   - `IMG_4515.MOV` for HLG.
   - Assert the outputs exist, `master.m3u8` parses, and every variant is tagged bt709.
   - On the server, check the whole account's thread count against the 200 limit while an HDR encode and an upload run together. Measure with `ps -L -u quhosting | wc -l`; the budget is ≤ 150.
-    - ffmpeg is about 40 threads: decode 2, filters 4, and 3 x264 encoders with 2 threads plus lookahead each.
+    - ffmpeg runs one thread each for decode, filters and every x264 rung; the worker log records each job's peak thread count.
     - Node API about 12 (`UV_THREADPOOL_SIZE=4`), worker Node about 10, Python about 6, and the rest is headroom for cron and SSH.
 - **Python (pytest).** HEIC with a P3 profile, EXIF rotation, PNG with alpha, `.cube` generation, the hable203 acceptance test, and `pytest -m validation` for the selection gate.
 - **UI.** Playwright at 390px and 1440px in both themes, covering flows 1–7 from the design handoff against a seeded local stack. Includes axe checks for WCAG 2.2 AA contrast and keyboard-only passes through the lightbox, player, grids and tables.
 - **Production smoke (`scripts/smoke.ts`).**
-  1. Sign in as a seeded test member by reading the OTP over IMAP from a dedicated `smoke@qu.acm.org` mailbox on the same account. Production has no auth bypass. All smoke data lives in one "Smoke test" event that the script purges at the end.
+  1. Sign in as a seeded core test account by reading the OTP over IMAP from a dedicated `smoke@qu.acm.org` mailbox on the same account. Production has no auth bypass. All smoke data lives in one "Smoke test" event that the script purges at the end.
   2. Upload a 5-second HLG clip and a HEIC photo as core.
   3. Poll until both are `ready`.
   4. Fetch `master.m3u8` and a byte range of `data.ts`.
   5. Download the original with `Range: bytes=0-99`.
-  6. Confirm that a member session gets 404 for a core asset, its media and its key.
+  6. Confirm that a signed-out request gets 404 for a core asset, its media and its key.
   7. Check on disk that the core asset's files end in `.enc` and that `~/keys` is empty.
 
 ### Decisions taken
@@ -1176,11 +1203,18 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
     ["Production hostname", "library.qu.acm.org (cPanel subdomain + AutoSSL)"],
     ["Database and role", "Created over SSH with uapi: quhosting_library and quhosting_library_app; the password goes straight into shared/.env"],
     ["Arabic", "English only in v1, built on i18next with logical CSS so Arabic is a translation file later"],
-    ["Download as JPEG for HEIC", "Yes: download.jpg generated at ingest"],
+    ["Download as JPEG for HEIC", "No: photos download as the original only; JPEG copies are no longer made (image_jpeg kept for the CHECK and old rows)"],
+    ["Access model", "Member-tier items are public (UI label \"Public\"): signed-out visitors read as ANON via readerOf(), core items stay 404 and uploader names are hidden. Account, upload and admin need a core session"],
+    ["Accounts", "Core or core + admin only (admin is a flag); new accounts are always core, old member rows can't sign in; Members shows Admin / Core; bulk add has an .xlsx template"],
+    ["Events", "Core members edit events (event page, Admin › Events) and set covers from the viewer; admins delete them"],
+    ["OTP sender", "noreply@qu.acm.org, shown as \"ACM Library\", through SMTP host mail.qu.acm.org (TLS certificate covers *.qu.acm.org)"],
+    ["Where releases are built", "On the laptop; bundles are rsynced (scripts/deploy.sh)"],
+    ["Automatic tone-curve selection", "Admin checkbox, default off, works when ticked; the validation gate is information only; hable203 otherwise"],
+    ["Worker scheduling", "Cron every 2 minutes; the API starts the worker right after an upload finishes (WORKER_WAKE, flock -w 20); cron covers admin actions, retries and crashes"],
     ["torch and pyiqa", "Installed in Milestone 10, when automatic tone-curve selection is built"],
     ["First admin", "tech@qu.acm.org, created by scripts/bootstrap-admin.ts"],
     ["Upload client", "tus-js-client directly (the library Uppy's tus plugin wraps) behind the design's own upload screens; Uppy's dashboard UI isn't used, so it is left out"],
-    ["Event visibility for members", "Members see an event only when it holds something they can see; core members see every event, including empty ones to upload into"],
+    ["Event visibility for signed-out visitors", "Signed-out visitors see an event only when it holds something they can see; core members see every event, including empty ones to upload into"],
     ["React Router", "v7: v8 requires React 19, and the handoff fixes React 18"],
     ["Local dev ports", "API 3080 and Vite 5180 (strict), because 3000 and 5173 are commonly taken"],
   ]}
@@ -1191,11 +1225,11 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
 <QuestionForm
   id="open-questions"
   questions={[
-    { id: "q-sender", title: "Which mailbox sends sign-in codes?", subtitle: "OTP mail needs SMTP credentials for a qu.acm.org mailbox. A dedicated sender keeps replies and bounces out of the tech inbox.", mode: "single", options: [
+    { id: "q-sender", title: "Which mailbox sends sign-in codes?", subtitle: "Settled: noreply@qu.acm.org (\"ACM Library\") through mail.qu.acm.org, whose TLS certificate covers *.qu.acm.org.", mode: "single", options: [
       { id: "noreply", label: "Create noreply@qu.acm.org", detail: "I create it with uapi Email add_pop over SSH and store its password only in shared/.env.", recommended: true },
       { id: "tech", label: "Send from tech@qu.acm.org", detail: "You provide its password in the local .env; replies land in the tech inbox." }
     ] },
-    { id: "q-build", title: "Where are releases built?", subtitle: "The backend handoff's §13 (Decided) says build on the server. The plan recommends building locally, for inode and CPU reasons.", mode: "single", options: [
+    { id: "q-build", title: "Where are releases built?", subtitle: "Settled: built locally and rsynced (scripts/deploy.sh), for inode and CPU reasons, although the backend handoff's §13 says build on the server.", mode: "single", options: [
       { id: "local", label: "Build locally, rsync bundles", detail: "A few hundred files on the server; builds never compete with live traffic; needs a dev machine to deploy.", recommended: true },
       { id: "server", label: "git pull + build on the server", detail: "Matches the handoff; deploys from any SSH session; about 30k node_modules files and a CPU-heavy build on the shared host." }
     ] }

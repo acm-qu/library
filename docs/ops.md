@@ -49,8 +49,9 @@ Install `deploy/crontab.template` with `crontab`. Or add each line in cPanel's C
 
 ## Everyday checks
 
-- **Admin · Processing queue** shows when the worker last checked in. The worker runs every minute, so a time more
-  than a few minutes old means cron stopped. Check `crontab -l` and `~/logs/acm-worker.log`.
+- **Admin · Processing queue** shows when the worker last checked in. Cron starts the worker every 2 minutes (and uploads
+  start it at once), so a time more than about 5 minutes old means cron stopped; the app then shows "Waiting for the
+  processor" and `health.sh` mails after 10 minutes. Check `crontab -l` and `~/logs/acm-worker.log`.
 - **Admin · Storage** shows file count against the host's limit. The limit is unknown until A2 confirms it; enter
   it there once you know. Each video adds about 10 files whatever its length, and each photo adds 3 or 4.
 
@@ -89,8 +90,10 @@ to be tight, torch's C++ headers (`torch/include`, never used at runtime) are th
 - **PostgreSQL 9.6 (EOL).** The schema avoids features newer than 9.6, so moving to a newer Postgres is a
   dump and restore.
 - **A PostGIS `topology` schema** came with the database and our role can't dump it. Backups use `-n public`.
-- **CloudLinux limits per-account CPU and memory.** The worker runs one job at a time, children run at nice 10
-  with capped threads, and ffmpeg gets `-threads 2`.
+- **CloudLinux limits per-account CPU and memory.** The account has 4 cores, 200 tasks
+  (processes + threads) and 30 MB/s of disk IO, while `nproc` reports 64. The worker runs one job at a time; children run
+  at nice 19 under `ionice -c3`, with BLAS/OpenMP capped, and every ffmpeg/ffprobe call has explicit `-threads`/
+  `-filter_threads` (1 per stage in the HLS encode). Anything run by hand over SSH needs the same caps.
 - **One Passenger process.** Rate limits and tus upload locks are in memory. Running more processes would need
   a shared store first.
 - **Accounts.** One SSH key per maintainer, and turn on cPanel two-factor authentication for every account that
