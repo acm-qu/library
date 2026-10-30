@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import type { Bucket } from '../api/uploads.ts';
 import { useMe } from '../data/session.ts';
-import { useMyUploads, useRetry } from '../data/uploads.ts';
+import { useMyUploads, useRefreshOnUploadChange, useRetry } from '../data/uploads.ts';
 import { fmtBytes, fmtDate, fmtDuration, fmtTime, readyAt } from '../i18n/format.ts';
 import { useUploads } from '../lib/uploader.ts';
 import { Icon, type IconName } from '../ui/Icon.tsx';
@@ -21,6 +21,7 @@ export function MyUploadsScreen() {
   const me = useMe().data!;
   const [bucket, setBucket] = useState<Bucket>('all');
   const tabs = useTabIndicator<HTMLDivElement>('line-bottom', bucket);
+  useRefreshOnUploadChange();
   const q = useMyUploads(bucket);
   const items = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
   const counts = q.data?.pages[0]?.counts;
