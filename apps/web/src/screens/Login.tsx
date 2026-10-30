@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client.ts';
 import { useRequestAccess, useRequestCode, useVerify } from '../data/session.ts';
+import type { LoginMosaic } from '@acm/core/schemas';
+import { useLoginMosaic } from '../data/library.ts';
 import { safeNext } from '../lib/safeNext.ts';
+import { fadeIn } from '../ui/Skeleton.tsx';
 import { toggleTheme, useTheme } from '../lib/theme.ts';
 import { mmss, useCountdown } from '../lib/useCountdown.ts';
 import { GenderRadio } from '../ui/GenderRadio.tsx';
@@ -84,26 +87,27 @@ export function LoginScreen() {
     }
   }
 
+  const photos = useLoginMosaic().data?.images ?? [];
   const needNew = codeError?.kind === 'expired' || codeError?.kind === 'locked';
   const sending = request.isPending;
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexWrap: 'wrap' }}>
       <div className="hide-sm" aria-hidden="true" style={{ flex: '1 1 560px', minHeight: '100vh', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gridTemplateRows: 'repeat(3, minmax(0, 1fr))', gap: 4, background: 'var(--bg)' }}>
-        <div style={{ gridColumn: 'span 2', gridRow: 'span 2', background: 'linear-gradient(160deg, #8B7B6D, #4C4742)' }} />
-        <div style={{ background: 'linear-gradient(200deg, #5F6B74, #2F353A)' }} />
-        <div style={{ background: 'linear-gradient(200deg, #6E7C70, #343B35)' }} />
-        <div style={{ background: 'linear-gradient(200deg, #A39384, #5A5048)' }} />
-        <div style={{ background: 'linear-gradient(200deg, #7D7086, #3D3842)' }} />
-        <div style={{ background: 'linear-gradient(200deg, #9A8C74, #544B3C)' }} />
+        <Tile i={0} photos={photos} bg="linear-gradient(160deg, #8B7B6D, #4C4742)" style={{ gridColumn: 'span 2', gridRow: 'span 2' }} />
+        <Tile i={1} photos={photos} bg="linear-gradient(200deg, #5F6B74, #2F353A)" />
+        <Tile i={2} photos={photos} bg="linear-gradient(200deg, #6E7C70, #343B35)" />
+        <Tile i={3} photos={photos} bg="linear-gradient(200deg, #A39384, #5A5048)" />
+        <Tile i={4} photos={photos} bg="linear-gradient(200deg, #7D7086, #3D3842)" />
+        <Tile i={5} photos={photos} bg="linear-gradient(200deg, #9A8C74, #544B3C)" />
       </div>
 
       <main id="main" style={{ flex: '1 1 480px', minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
         <div className="show-sm" aria-hidden="true" style={{ height: 200, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 3 }}>
-          <div style={{ gridColumn: 'span 2', background: 'linear-gradient(160deg, #8B7B6D, #4C4742)' }} />
+          <Tile i={0} photos={photos} bg="linear-gradient(160deg, #8B7B6D, #4C4742)" style={{ gridColumn: 'span 2' }} />
           <div style={{ display: 'grid', gap: 3 }}>
-            <div style={{ background: 'linear-gradient(200deg, #5F6B74, #2F353A)' }} />
-            <div style={{ background: 'linear-gradient(200deg, #6E7C70, #343B35)' }} />
+            <Tile i={1} photos={photos} bg="linear-gradient(200deg, #5F6B74, #2F353A)" />
+            <Tile i={2} photos={photos} bg="linear-gradient(200deg, #6E7C70, #343B35)" />
           </div>
         </div>
         <LoginTopRow />
@@ -397,6 +401,16 @@ function LoginTopRow() {
           <Icon name={resolved === 'dark' ? 'sun' : 'moon'} />
         </button>
       </div>
+    </div>
+  );
+}
+
+/** One mosaic square: a public photo (all of them come in one request) over its gradient, which shows while it loads or when there are none. */
+function Tile({ i, photos, bg, style }: { i: number; photos: LoginMosaic['images']; bg: string; style?: React.CSSProperties }) {
+  const photo = photos.length ? photos[i % photos.length] : undefined;
+  return (
+    <div style={{ background: bg, overflow: 'hidden', ...style }}>
+      {photo && <img {...fadeIn} src={photo.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
     </div>
   );
 }
