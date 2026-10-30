@@ -8,8 +8,8 @@ import { addUser, db, H, useApp } from './helpers.ts';
 const t = useApp();
 let member: string, core: string, admin: string, coreId: string, adminId: string;
 
-async function cookieFor(email: string, role: 'member' | 'core', isAdmin = false) {
-  const u = await addUser(email, { role, isAdmin });
+async function cookieFor(email: string, role: 'member' | 'core', isAdmin = false, gender: 'male' | 'female' = 'female') {
+  const u = await addUser(email, { role, isAdmin, gender });
   return { id: u.id, sid: (await createSession(db, u.id, { ip: null, userAgent: null })).token };
 }
 const get = (url: string, sid: string) => t.app.inject({ method: 'GET', url, cookies: { sid } });
@@ -94,6 +94,54 @@ describe('signed-out visitors', () => {
     expect((await anon(`/api/assets/${hidden}`)).statusCode).toBe(404);
     expect((await anon(`/api/media/${hidden}/thumb`)).statusCode).toBe(404);
     expect((await get(`/api/assets/${pub}`, member)).json().uploader).toMatchObject({ id: coreId });
+  });
+});
+
+describe('girls only', () => {
+  it('shows girls-only items, and events holding only them, to female core members alone; the uploader keeps a status row', async () => {
+    const { sid: maleAdmin } = await cookieFor('ma@qu.edu.qa', 'core', true, 'male');
+    const { sid: maleCore, id: maleId } = await cookieFor('mc@qu.edu.qa', 'core', false, 'male');
+    const mixed = await addEvent('Mixed', '2026-10-17');
+    const girlsNight = await addEvent('Girls night', '2026-10-01');
+    const pub = await addAsset(mixed);
+    const girls = await addAsset(mixed, { girlsOnly: true, uploaderId: maleId });
+    const onlyGirls = await addAsset(girlsNight, { tier: 'core', girlsOnly: true });
+    const anon = (url: string) => t.app.inject({ method: 'GET', url });
+    const titles = async (sid?: string) => (await (sid ? get('/api/events', sid) : anon('/api/events'))).json().items.map((e: { title: string; photoCount: number }) => `${e.title}:${e.photoCount}`);
+
+    expect(await titles(core)).toEqual(['Mixed:2', 'Girls night:1']);
+    expect(await titles(admin)).toEqual(['Mixed:2', 'Girls night:1']);
+    for (const sid of [maleAdmin, maleCore, member, undefined]) expect(await titles(sid)).toEqual(['Mixed:1']);
+    expect((await get(`/api/events/${mixed}/assets`, maleAdmin)).json().items.map((x: { id: string }) => x.id)).toEqual([pub]);
+    expect((await get(`/api/events/${girlsNight}`, maleAdmin)).statusCode).toBe(404);
+    // Nor can he edit or delete an event that is hidden from him.
+    expect((await send('PATCH', `/api/events/${girlsNight}`, maleAdmin, { title: 'x' })).statusCode).toBe(404);
+    expect((await send('DELETE', `/api/events/${girlsNight}`, maleAdmin)).statusCode).toBe(404);
+    expect((await get(`/api/assets/${girls}`, core)).json()).toMatchObject({ girlsOnly: true, canEdit: false });
+    for (const sid of [maleAdmin, maleCore]) expect((await get(`/api/assets/${girls}`, sid)).statusCode).toBe(404);
+    expect((await anon(`/api/assets/${girls}`)).statusCode).toBe(404);
+    // The male uploader still sees his upload's status (no media URLs exist on that row).
+    const mine = (await get('/api/uploads/mine', maleCore)).json().items;
+    expect(mine.map((i: { assetId: string; girlsOnly: boolean }) => [i.assetId, i.girlsOnly])).toEqual([[girls, true]]);
+    expect((await get(`/api/uploads/existing?eventId=${mixed}`, maleCore)).json().items).toHaveLength(1);
+
+    // Admin › Item and the queue: a male admin gets 404 for the item and a queue row without its details.
+    await db.insert(jobs).values({ id: newId(), assetId: onlyGirls, kind: 'process' });
+    expect((await get(`/api/admin/assets/${onlyGirls}/processing`, maleAdmin)).statusCode).toBe(404);
+    expect((await get(`/api/admin/assets/${onlyGirls}/processing`, admin)).json().asset).toMatchObject({ girlsOnly: true });
+    expect((await get('/api/admin/jobs?tab=queued', maleAdmin)).json().items.map((j: { asset: unknown }) => j.asset)).toEqual([null]);
+    expect((await get('/api/admin/jobs?tab=queued', admin)).json().items[0].asset).toMatchObject({ id: onlyGirls });
+
+    // Editing: a male admin can't reach it; a female admin turns it off and it's audited.
+    expect((await send('PATCH', `/api/assets/${girls}`, maleAdmin, { girlsOnly: false })).statusCode).toBe(404);
+    expect((await send('PATCH', `/api/assets/${girls}`, admin, { girlsOnly: false })).statusCode).toBe(200);
+    expect((await get(`/api/assets/${girls}`, maleAdmin)).json()).toMatchObject({ girlsOnly: false });
+    expect((await send('PATCH', `/api/assets/${pub}`, maleAdmin, { girlsOnly: true })).statusCode).toBe(200);
+    expect((await get(`/api/assets/${pub}`, maleAdmin)).statusCode).toBe(404);
+    expect((await db.select().from(auditLog)).map((r) => [r.action, r.data])).toEqual([
+      ['asset.girls_only', { from: true, to: false }],
+      ['asset.girls_only', { from: false, to: true }],
+    ]);
   });
 });
 

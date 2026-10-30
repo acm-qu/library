@@ -1,7 +1,10 @@
 // Locale-aware formatting. Everything user-visible that is a date, number, size or duration goes through here.
 import i18n from './index.ts';
 
-const loc = () => (i18n.language === 'en' ? 'en-GB' : i18n.language); // "17 Oct 2026"
+export const loc = () => (i18n.language === 'en' ? 'en-GB' : i18n.language); // "17 Oct 2026"
+
+/** One part of a 'YYYY-MM-DD' day ("October 2026", "Mo", "17"), read in UTC so the day never shifts. */
+export const fmtDayPart = (iso: string, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(loc(), { ...o, timeZone: 'UTC' }).format(new Date(`${iso}T00:00:00Z`));
 
 export const fmtDate = (iso: string | Date) =>
   new Intl.DateTimeFormat(loc(), { day: 'numeric', month: 'short', year: 'numeric', timeZone: typeof iso === 'string' && iso.length === 10 ? 'UTC' : undefined }).format(

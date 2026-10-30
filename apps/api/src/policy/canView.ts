@@ -6,12 +6,16 @@ import type { Viewer } from '@acm/core/schemas';
 export const LEVELS = ['none', 'status', 'download', 'full'] as const;
 export type Access = (typeof LEVELS)[number];
 
-export type AssetForAccess = Pick<Asset, 'tier' | 'status' | 'uploaderId' | 'deletedAt'>;
+export type AssetForAccess = Pick<Asset, 'tier' | 'girlsOnly' | 'status' | 'uploaderId' | 'deletedAt'>;
+
+/** Girls-only items are for signed-in female core members only: not male admins, not their own male uploader. */
+export const seesGirlsOnly = (v: Viewer) => v.role === 'core' && v.gender === 'female';
 
 export function access(v: Viewer | null, a: AssetForAccess, eventDeleted = false): Access {
   if (!v || v.status !== 'active') return 'none';
   if (a.deletedAt || eventDeleted || a.status === 'deleting') return 'none';
   if (a.tier === 'core' && v.role !== 'core') return 'none';
+  if (a.girlsOnly && !seesGirlsOnly(v)) return 'none';
   if (a.status === 'ready') return 'full';
   if (a.status === 'original_only') return 'download';
   return v.isAdmin || a.uploaderId === v.id ? 'status' : 'none';

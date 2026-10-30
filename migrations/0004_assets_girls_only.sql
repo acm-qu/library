@@ -1,0 +1,1 @@
+ALTER TABLE "assets" ADD COLUMN "girls_only" boolean DEFAULT false NOT NULL;

@@ -127,7 +127,11 @@
 .app .otp span,.app .otp input{width:52px;height:60px;display:grid;place-items:center;text-align:center;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-family:var(--f-display);font-size:28px;font-weight:500;font-variant-numeric:tabular-nums}
 .app .otp .on{border:2px solid var(--focus)}
 .app .otp .bad{border-color:var(--danger)}
-.app .check{width:20px;height:20px;accent-color:var(--primary)}
+.app input[type=checkbox]{appearance:none;-webkit-appearance:none;flex:none;width:20px;height:20px;margin:0;border:1.5px solid var(--border-strong);border-radius:0;background:var(--surface);display:inline-grid;place-content:center;cursor:pointer;transition:background-color .15s ease-out,border-color .15s ease-out}
+.app input[type=checkbox]::before{content:'';width:12px;height:12px;background:var(--on-primary);clip-path:polygon(14% 44%,0 65%,50% 100%,100% 16%,80% 0,43% 62%);transform:scale(0);transition:transform .15s ease-out}
+.app input[type=checkbox]:checked{background:var(--primary);border-color:var(--primary)}
+.app input[type=checkbox]:checked::before{transform:scale(1)}
+.app input[type=checkbox]:disabled{opacity:.5;cursor:progress}
 .app .switch{position:relative;display:inline-block;width:40px;height:24px;background:var(--surface-3);border-radius:var(--r-full);flex:none}
 .app .switch::after{content:'';position:absolute;top:3px;inset-inline-start:3px;width:18px;height:18px;background:#FFFFFF;border-radius:var(--r-full);box-shadow:var(--shadow-1)}
 .app .switch.on{background:var(--primary)}

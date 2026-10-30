@@ -109,6 +109,9 @@ export function assetRoutes(app: FastifyInstance, { db }: { db: Db }) {
         await audit(tx, v.id, 'asset.tier', { type: 'asset', id: a.id }, { from: a.tier, to: body.tier });
         await tx.insert(jobs).values({ id: newId(), assetId: a.id, kind: a.kind === 'video' && a.status === 'ready' ? 'reprocess' : 'retier', priority: 100 });
       }
+      if (body.girlsOnly !== undefined && body.girlsOnly !== a.girlsOnly) {
+        await audit(tx, v.id, 'asset.girls_only', { type: 'asset', id: a.id }, { from: a.girlsOnly, to: body.girlsOnly });
+      }
       if (body.eventId && body.eventId !== a.eventId) {
         await audit(tx, v.id, 'asset.move', { type: 'asset', id: a.id }, { from: a.eventId, to: body.eventId });
         await tx.update(events).set({ coverAssetId: null }).where(and(eq(events.id, a.eventId), eq(events.coverAssetId, a.id)));

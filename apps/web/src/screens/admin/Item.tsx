@@ -26,6 +26,7 @@ export function ItemScreen() {
   const [confirm, setConfirm] = useState<'reprocess' | 'tier' | 'delete' | null>(null);
   const reprocess = useAdminMutation((id: string, curve?: string) => api.reprocess(id, curve));
   const tier = useAdminMutation((id: string, to: 'member' | 'core') => api.patchAsset(id, { tier: to }));
+  const girls = useAdminMutation((id: string, on: boolean) => api.patchAsset(id, { girlsOnly: on }));
   const del = useAdminMutation((id: string) => api.deleteAsset(id));
   useEffect(() => {
     if (q.data) document.title = `${q.data.asset.filename} · ${t('admin.nav')}`;
@@ -86,6 +87,12 @@ export function ItemScreen() {
               {a.tier === 'core' && <Icon name="shield" />}
               {t(a.tier === 'core' ? 'admin.i_tierCore' : 'admin.i_tierMember')}
             </span>
+            {a.girlsOnly && (
+              <span className="tier">
+                <Icon name="person" />
+                {t('upload.girlsOnly')}
+              </span>
+            )}
             <span className="t-sm muted">
               <Trans i18nKey="admin.i_uploaded" values={{ event: a.eventTitle }} components={{ a: <Link to={`/events/${a.eventId}`} /> }} />
             </span>
@@ -174,6 +181,16 @@ export function ItemScreen() {
                 {t('admin.i_confirmTierBody')}
               </Confirm>
             )}
+            <hr className="divider" />
+            <label className="row" style={{ gap: 12, cursor: 'pointer' }}>
+              <input type="checkbox" className="check" checked={a.girlsOnly} disabled={girls.isPending} aria-describedby="girls-help" onChange={(e) => girls.mutate([a.id, e.target.checked])} />
+              <span className="stack" style={{ gap: 2 }}>
+                <span className="label">{t('upload.girlsOnly')}</span>
+                <span className="t-sm muted" id="girls-help">
+                  {t('admin.i_girlsOnlyBody')}
+                </span>
+              </span>
+            </label>
             <hr className="divider" />
             <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
               <div className="stack grow">

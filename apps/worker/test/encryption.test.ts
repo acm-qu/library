@@ -132,6 +132,14 @@ describe('core-tier video', () => {
     const d = createDecipheriv('aes-128-cbc', key.rawPayload, Buffer.alloc(16));
     const seg = Buffer.concat([d.update(ts.subarray(Number(m[2]), Number(m[2]) + Number(m[1]))), d.final()]);
     expect(seg[0]).toBe(0x47);
+
+    // Girls-only: a male admin gets 404 for everything, a female core member (coreSid) still gets it all.
+    await db.update(assets).set({ girlsOnly: true }).where(eq(assets.id, id));
+    const maleAdmin = (await createSession(db, (await addUser('ma@x.qa', { role: 'core', isAdmin: true, gender: 'male' })).id, { ip: null, userAgent: null })).token;
+    const urls = [`/api/assets/${id}`, `/api/media/${id}/thumb`, `/api/media/${id}/original`, `/api/media/${id}/hls/key`];
+    expect(await Promise.all(urls.map(async (u) => (await get(u, maleAdmin)).statusCode))).toEqual([404, 404, 404, 404]);
+    expect(await Promise.all(urls.map(async (u) => (await get(u, coreSid)).statusCode))).toEqual([200, 200, 200, 200]);
+    expect((await get(`/api/assets/${id}`, coreSid)).json()).toMatchObject({ girlsOnly: true });
   }, 120_000);
 });
 

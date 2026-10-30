@@ -3,12 +3,15 @@
 import { assets } from '@acm/core/db';
 import type { Viewer } from '@acm/core/schemas';
 import { sql, type SQL } from 'drizzle-orm';
+import { seesGirlsOnly } from './canView.ts';
 
 const UNFINISHED = sql`(${assets.status} in ('uploading','queued','processing','failed','needs_review'))`;
 const BROWSABLE = sql`(${assets.status} in ('ready','original_only'))`;
 
+export const girlsOk = (v: Viewer): SQL => (seesGirlsOnly(v) ? sql`true` : sql`not ${assets.girlsOnly}`);
+
 function tierOk(v: Viewer): SQL {
-  return v.role === 'core' ? sql`true` : sql`${assets.tier} = 'member'`;
+  return sql`(${v.role === 'core' ? sql`true` : sql`${assets.tier} = 'member'`} and ${girlsOk(v)})`;
 }
 
 export function browsable(v: Viewer): SQL {

@@ -15,12 +15,17 @@ import { Confirm } from '../../ui/Confirm.tsx';
 import { Icon } from '../../ui/Icon.tsx';
 import { Rich } from '../../ui/Rich.tsx';
 import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
+import { Select } from '../../ui/Select.tsx';
 import { useTabIndicator } from '../../ui/useTabIndicator.ts';
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 type Pending = { kind: 'disable'; user: AdminUser } | null;
 /** Spreadsheet with an Email column; paste the column into the list below. */
 const TEMPLATE = '/members-template.xlsx';
+const roleOptions = (t: ReturnType<typeof useTranslation>['t']) => [
+  { value: 'core' as const, label: t('admin.m_roleCore') },
+  { value: 'admin' as const, label: t('admin.m_roleAdmin') },
+];
 
 export function MembersScreen() {
   const { t } = useTranslation();
@@ -324,10 +329,7 @@ function AddOne({ onClose }: { onClose: () => void }) {
           <label className="label" htmlFor="ar">
             {t('admin.m_role')}
           </label>
-          <select className="input" id="ar" value={f.isAdmin ? 'admin' : 'core'} onChange={(e) => setF({ ...f, isAdmin: e.target.value === 'admin' })}>
-            <option value="core">{t('admin.m_roleCore')}</option>
-            <option value="admin">{t('admin.m_roleAdmin')}</option>
-          </select>
+          <Select id="ar" value={f.isAdmin ? 'admin' : 'core'} options={roleOptions(t)} onChange={(v) => setF({ ...f, isAdmin: v === 'admin' })} />
         </div>
       </div>
       <GenderRadio id="ag" value={f.gender} onChange={(gender) => setF({ ...f, gender })} />
@@ -416,10 +418,7 @@ function AddMany({ onClose }: { onClose: () => void }) {
             <label className="label" htmlFor="br">
               {t('admin.m_addAs')}
             </label>
-            <select className="input" id="br" value={isAdmin ? 'admin' : 'core'} onChange={(e) => setIsAdmin(e.target.value === 'admin')}>
-              <option value="core">{t('admin.m_roleCore')}</option>
-              <option value="admin">{t('admin.m_roleAdmin')}</option>
-            </select>
+            <Select id="br" value={isAdmin ? 'admin' : 'core'} options={roleOptions(t)} onChange={(v) => setIsAdmin(v === 'admin')} />
           </div>
           <span className="grow" />
           <button

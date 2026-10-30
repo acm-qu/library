@@ -25,6 +25,7 @@ export function MediaTile({ a, index, eventTitle }: { a: AssetTile; index: numbe
             ? t('tile.video', { duration: a.durationS ? fmtDuration(a.durationS) : '' })
             : t('tile.photo', { event: eventTitle }),
     a.tier === 'core' ? t('tile.core') : null,
+    a.girlsOnly ? t('tile.girlsOnly') : null,
     a.status === 'needs_review' ? t('tile.review') : null,
     a.status === 'original_only' ? t('tile.originalOnly') : null,
     t('tile.item', { n: index + 1 }),
@@ -37,9 +38,18 @@ export function MediaTile({ a, index, eventTitle }: { a: AssetTile; index: numbe
   return (
     <Link className={thumb ? 'tile skel' : 'tile'} to={`/p/${a.id}`} state={{ background: loc }} aria-label={label} style={{ width: '100%', height: '100%', background: thumb ? undefined : 'var(--surface-2)' }}>
       {a.thumbUrl && !broken && <img {...fadeIn} src={a.thumbUrl} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
-      {a.tier === 'core' && (
-        <span className="mb" title={t('tile.core')} style={{ position: 'absolute', top: 6, insetInlineStart: 6 }}>
-          <Icon name="shield" />
+      {(a.tier === 'core' || a.girlsOnly) && (
+        <span className="row" style={{ position: 'absolute', top: 6, insetInlineStart: 6, gap: 4 }}>
+          {a.tier === 'core' && (
+            <span className="mb" title={t('tile.core')}>
+              <Icon name="shield" />
+            </span>
+          )}
+          {a.girlsOnly && (
+            <span className="mb" title={t('tile.girlsOnly')}>
+              <Icon name="person" />
+            </span>
+          )}
         </span>
       )}
       {a.kind === 'video' && !unfinished && (

@@ -20,6 +20,7 @@ import {
   PatchUserBody,
   ReprocessBody,
   ResolveBody,
+  type Viewer,
 } from '@acm/core/schemas';
 import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -32,6 +33,7 @@ import { HttpError, notFound } from '../lib/errors.ts';
 import { computeUsage } from '../lib/compute.ts';
 import { activeJobs, drainOf, loadRho } from '../lib/queue.ts';
 import type { Mailer } from '../mail/mailer.ts';
+import { seesGirlsOnly } from '../policy/canView.ts';
 import { sendFile, sendSealed } from './media.ts';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
@@ -211,6 +213,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
 
   // ── Processing queue ───────────────────────────────────────────────────────────────────────────────
   app.get('/api/admin/jobs', { preHandler: requireAdmin }, async (req) => {
+    const v = viewerOf(req);
     const q = AdminJobQuery.parse(req.query);
     const offset = decodeCursor(OffsetCursor, q.cursor)?.o ?? 0;
     const queue = await activeJobs(db);
@@ -277,7 +280,8 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
         createdAt: j.createdAt.toISOString(),
         startedAt: iso(j.startedAt),
         finishedAt: iso(j.finishedAt),
-        asset: a ? { id: a.id, filename: a.originalFilename, status: a.status, eventTitle: eventTitle ?? '', thumbUrl: thumbUrl(a), kind: a.kind, durationS: a.durationS, hdr: a.hdr, bytes: a.originalSize, reviewReason: a.reviewReason } : null,
+        // A girls-only item the admin may not see keeps its queue row (counts, cancel, retry) but not its details.
+        asset: a && (!a.girlsOnly || seesGirlsOnly(v)) ? { id: a.id, filename: a.originalFilename, status: a.status, eventTitle: eventTitle ?? '', thumbUrl: thumbUrl(a), kind: a.kind, durationS: a.durationS, hdr: a.hdr, bytes: a.originalSize, reviewReason: a.reviewReason } : null,
       })),
       nextCursor: rows.length > q.limit ? encodeCursor({ o: offset + q.limit }) : null,
       summary: {
@@ -337,16 +341,16 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
   });
 
   // ── Item details ───────────────────────────────────────────────────────────────────────────────────
-  async function adminAsset(id: string) {
+  async function adminAsset(v: Viewer, id: string) {
     if (!Id.safeParse(id).success) throw notFound();
     const [row] = await db.select({ a: assets, eventTitle: events.title }).from(assets).innerJoin(events, eq(events.id, assets.eventId)).where(and(eq(assets.id, id), isNull(assets.deletedAt)));
-    if (!row || row.a.status === 'deleting') throw notFound();
+    if (!row || row.a.status === 'deleting' || (row.a.girlsOnly && !seesGirlsOnly(v))) throw notFound();
     return row;
   }
 
   app.get('/api/admin/assets/:id/processing', { preHandler: requireAdmin }, async (req) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const { a, eventTitle } = await adminAsset(id);
+    const { a, eventTitle } = await adminAsset(viewerOf(req), id);
     const [rs, runs, js, queue] = await Promise.all([
       db.select().from(renditions).where(eq(renditions.assetId, a.id)),
       db.select().from(processingRuns).where(eq(processingRuns.assetId, a.id)).orderBy(desc(processingRuns.startedAt)).limit(10),
@@ -361,6 +365,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
         filename: a.originalFilename,
         kind: a.kind,
         tier: a.tier,
+        girlsOnly: a.girlsOnly,
         status: a.status,
         eventId: a.eventId,
         eventTitle,
@@ -386,7 +391,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
   app.get('/api/admin/assets/:id/frames/:n', { preHandler: requireAdmin }, async (req, reply) => {
     const p = z.object({ id: z.string(), n: z.coerce.number().int().min(0).max(15) }).safeParse(req.params);
     if (!p.success) throw notFound();
-    const { a } = await adminAsset(p.data.id);
+    const { a } = await adminAsset(viewerOf(req), p.data.id);
     if (a.kind !== 'video' || a.renditionRev < 1) throw notFound();
     const file = path.join(revDir(cfg.MEDIA_ROOT, a.id, a.renditionRev), 'frames', `${p.data.n}.webp`);
     // The URL carries ?r=<run id>, so a re-process gets a new URL and the long cache is safe.
@@ -402,7 +407,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
     const v = viewerOf(req);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const body = ReprocessBody.parse(req.body ?? {});
-    const { a } = await adminAsset(id);
+    const { a } = await adminAsset(v, id);
     if (a.status === 'uploading') throw new HttpError('conflict');
     const jobId = newId();
     await db.transaction(async (tx) => {
@@ -417,7 +422,7 @@ export function adminRoutes(app: FastifyInstance, { db, cfg, mailer }: { db: Db;
     const v = viewerOf(req);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const { action } = ResolveBody.parse(req.body);
-    const { a } = await adminAsset(id);
+    const { a } = await adminAsset(v, id);
     if (a.status !== 'needs_review') throw new HttpError('conflict');
     await db.transaction(async (tx) => {
       if (action === 'process_default') {

@@ -99,6 +99,14 @@ const PATHS = {
   ),
   flag: <path d="M5 21V4m0 0h11l-2 4 2 4H5" />,
   back: <path d="m15 6-6 6 6 6" />,
+  next: <path d="m9 6 6 6-6 6" />,
+  chevron: <path d="m6 9 6 6 6-6" />,
+  calendar: (
+    <>
+      <rect x="4" y="5" width="16" height="15" />
+      <path d="M4 10h16M8 3v4M16 3v4" />
+    </>
+  ),
   edit: <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />,
   check2: <path d="m6 12 4 4 8-8" />,
 } as const;

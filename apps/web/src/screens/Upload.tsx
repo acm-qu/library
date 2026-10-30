@@ -172,6 +172,7 @@ function ChooseEvent({ initial, onPick }: { initial?: string; onPick: (id: strin
 function AddFiles({ event, onBack, onStart }: { event: { id: string; title: string; slug: string; defaultTier: Tier }; onBack: () => void; onStart: () => void }) {
   const { t } = useTranslation();
   const [picked, setPicked] = useState<Picked[]>([]);
+  const [girlsOnly, setGirlsOnly] = useState(false);
   const [over, setOver] = useState(false);
   const [tip, setTip] = useState(() => {
     try {
@@ -278,6 +279,15 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
             {picked.length > SHOW && <span className="t-sm subtle">{t('upload.andMore', { n: picked.length - SHOW })}</span>}
           </>
         )}
+        <label className="row" style={{ gap: 12, cursor: 'pointer' }}>
+          <input type="checkbox" className="check" checked={girlsOnly} aria-describedby="girls-help" onChange={(e) => setGirlsOnly(e.target.checked)} />
+          <span className="stack" style={{ gap: 2 }}>
+            <span className="t-sm">{t('upload.girlsOnly')}</span>
+            <span className="help" id="girls-help">
+              {t('upload.girlsOnlyHelp')}
+            </span>
+          </span>
+        </label>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button className="btn btn-g" onClick={onBack}>
             {t('upload.back')}
@@ -286,7 +296,7 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
             className="btn btn-p"
             disabled={!picked.length}
             onClick={() => {
-              uploader.add(picked.map(({ file, tier }) => ({ file, tier })), event.id);
+              uploader.add(picked.map(({ file, tier }) => ({ file, tier })), event.id, girlsOnly);
               onStart();
             }}
           >
@@ -398,6 +408,7 @@ function ProgressRow({ i }: { i: Item }) {
           <span className="t-sm muted tnum">
             {fmtBytes(i.file.size)}
             {i.tier === 'core' ? ` · ${t('upload.core')}` : ''}
+            {i.girlsOnly ? ` · ${t('upload.girlsOnly')}` : ''}
           </span>
         </span>
         <span className={`st ${cls}`}>

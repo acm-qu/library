@@ -167,6 +167,7 @@
     "queued": "Queued",
     "failed": "Upload failed, open My uploads to retry",
     "core": "core-tier",
+    "girlsOnly": "girls only",
     "review": "needs review",
     "originalOnly": "original only",
     "item": "item {n}"
@@ -212,6 +213,8 @@
     "members": "Public",
     "core": "Core",
     "whoCanSee": "Who can see {name}",
+    "girlsOnly": "Girls only",
+    "girlsOnlyHelp": "Only female core members and admins can see these",
     "remove": "Remove {name}",
     "duplicate": "Already in this event",
     "skip": "Skip",
@@ -339,6 +342,7 @@
     "uploadedBy": "Uploaded by",
     "uploadedLine": "{name} · {date}",
     "core": "Core",
+    "girlsOnly": "Girls only",
     "adminDetails": "Details for admins",
     "alt": "Photo from {event}, {date}",
     "notReady": "This item is still being processed.",
@@ -540,6 +544,7 @@
     "i_confirmTierMember": "Make this public?",
     "i_confirmTierBody": "Access changes right away. Securing the files takes a moment; the item shows “processing” until it's done.",
     "i_changeTier": "Change tier",
+    "i_girlsOnlyBody": "Only female core members and admins can see it.",
     "i_delete": "Delete item",
     "i_deleteBody": "Removes the copies for viewing and the original.",
     "i_deleteBtn": "Delete",
@@ -564,7 +569,7 @@
     "s_save": "Save",
     "s_photoCopies": "Photo copies (view, thumbnail, poster)",
     "s_videoFiles": "Video stream files",
-    "s_measured": "Measured {time} (nightly)",
+    "s_measured": "Measured {time}",
     "s_notMeasured": "Not measured yet. The nightly job fills this in.",
     "s_growth": "Growth",
     "s_growthNote": "Space used at the end of each month",
@@ -587,6 +592,9 @@
     "c_help": "The whole hosting account (every site on it), measured over 1 s and refreshed every 15 s. At these limits the host slows the site down or refuses new processes.",
     "c_unavailable": "Live compute is only measured on the server.",
     "s_curveLabel": "Choose each HDR video's tone curve automatically",
+    "s_saving": "Saving…",
+    "s_saved": "Saved",
+    "s_saveFailed": "Couldn't save. Try again.",
     "s_curveGatePassed": "Validation passed on the server.",
     "s_curveGatePending": "Validation hasn't run yet — selection still works.",
     "s_curveOn": "On. Each HDR video's curve is chosen from quality scores.",
@@ -612,5 +620,13 @@
     "intro": "Before you start, tell us your name and gender. You can change them later on your Account page.",
     "required": "Add your name and choose a gender to continue.",
     "continue": "Continue"
+  },
+  "picker": {
+    "noDate": "No date",
+    "chooseDate": "Choose a date",
+    "prevMonth": "Previous month",
+    "nextMonth": "Next month",
+    "today": "Today",
+    "clear": "Clear"
   }
 }

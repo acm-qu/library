@@ -12,6 +12,7 @@ export type Item = {
   file: File;
   eventId: string;
   tier: Tier;
+  girlsOnly: boolean;
   status: ItemStatus;
   sent: number;
   total: number;
@@ -74,7 +75,7 @@ function startOne(it: Item) {
       const wait = nextWait();
       return wait ? new Promise((r) => setTimeout(r, wait)) : undefined;
     },
-    metadata: { eventId: it.eventId, tier: it.tier, filename: it.file.name, filetype: it.file.type },
+    metadata: { eventId: it.eventId, tier: it.tier, girlsOnly: String(it.girlsOnly), filename: it.file.name, filetype: it.file.type },
     storeFingerprintForResuming: true,
     removeFingerprintOnSuccess: true,
     onProgress: (sent, total) => patch(it.key, { sent, total }),
@@ -135,12 +136,12 @@ function pump() {
 }
 
 export const uploader = {
-  add(files: { file: File; tier: Tier }[], eventId: string) {
+  add(files: { file: File; tier: Tier }[], eventId: string, girlsOnly = false) {
     const known = new Set(items.filter((i) => i.status !== 'cancelled' && i.status !== 'done').map((i) => i.key));
     for (const { file, tier } of files) {
       const key = fileKey(file);
       if (known.has(key)) continue;
-      items.push({ key, file, eventId, tier, status: 'waiting', sent: 0, total: file.size, drops: 0 });
+      items.push({ key, file, eventId, tier, girlsOnly, status: 'waiting', sent: 0, total: file.size, drops: 0 });
     }
     emit();
     pump();

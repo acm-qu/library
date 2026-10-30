@@ -36,5 +36,5 @@ export const getStorage = () => call(StorageReport, '/admin/storage');
 export const getCompute = () => call(ComputeReport, '/admin/compute');
 export const getSettings = () => call(AppSettings, '/admin/settings');
 export const patchSettings = (b: Partial<{ tonemapAuto: boolean; inodeLimit: number | null }>) => call(null, '/admin/settings', { method: 'PATCH', json: b });
-export const patchAsset = (id: string, b: { tier?: 'member' | 'core' }) => call(null, `/assets/${id}`, { method: 'PATCH', json: b });
+export const patchAsset = (id: string, b: { tier?: 'member' | 'core'; girlsOnly?: boolean }) => call(null, `/assets/${id}`, { method: 'PATCH', json: b });
 export const deleteAsset = (id: string) => call(null, `/assets/${id}`, { method: 'DELETE' });

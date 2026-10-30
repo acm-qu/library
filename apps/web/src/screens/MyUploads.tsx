@@ -107,7 +107,7 @@ export function MyUploadsScreen() {
             </div>
             <ul className="filelist panel" style={{ padding: 0 }}>
               {collapse(g.rows).map((r) => (
-                <Row key={r.item.assetId} r={r} isAdmin={me.isAdmin} />
+                <Row key={r.item.assetId} r={r} isAdmin={me.isAdmin} female={me.gender === 'female'} />
               ))}
             </ul>
           </section>
@@ -135,7 +135,7 @@ function collapse(rows: MyUploadItem[]) {
   return out;
 }
 
-function Row({ r, isAdmin }: { r: { item: MyUploadItem; more: number; bytes: number }; isAdmin: boolean }) {
+function Row({ r, isAdmin, female }: { r: { item: MyUploadItem; more: number; bytes: number }; isAdmin: boolean; female: boolean }) {
   const { t } = useTranslation();
   const retry = useRetry();
   const i = r.item;
@@ -145,6 +145,7 @@ function Row({ r, isAdmin }: { r: { item: MyUploadItem; more: number; bytes: num
     r.bytes ? fmtBytes(r.bytes) : null,
     video && i.durationS ? fmtDuration(i.durationS) : null,
     video && (i.hdr === 'hlg' || i.hdr === 'pq') ? t('myUploads.hdr') : null,
+    i.girlsOnly ? t('upload.girlsOnly') : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -200,7 +201,7 @@ function Row({ r, isAdmin }: { r: { item: MyUploadItem; more: number; bytes: num
             {t('myUploads.retry')}
           </button>
         )}
-        {isAdmin && (i.status === 'failed' || i.status === 'needs_review') && (
+        {isAdmin && (!i.girlsOnly || female) && (i.status === 'failed' || i.status === 'needs_review') && (
           <Link className="btn btn-g btn-sm" to={`/admin/items/${i.assetId}`}>
             {t('myUploads.details')}
           </Link>

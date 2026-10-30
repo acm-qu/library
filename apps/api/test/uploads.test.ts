@@ -184,7 +184,10 @@ describe.runIf(hasFfmpeg)('tus uploads', () => {
     expect((await create(10, { eventId, tier: 'secret', filename: 'a.jpg' })).statusCode).toBe(400);
     const spoof = await http('POST', '/api/uploads', { ...tusHeaders(), 'x-acm-uploader': newId(), 'upload-length': '10', 'upload-metadata': `eventId ${b64(eventId)},tier ${b64('member')},filename ${b64('a.jpg')}` });
     expect(spoof.statusCode).toBe(201);
-    expect((await db.select().from(assets))[0]!.uploaderId).toBe(core.id);
+    expect((await db.select().from(assets))[0]).toMatchObject({ uploaderId: core.id, girlsOnly: false });
+    expect((await create(10, { eventId, tier: 'member', girlsOnly: 'yes', filename: 'b.jpg' })).statusCode).toBe(400);
+    expect((await create(10, { eventId, tier: 'core', girlsOnly: 'true', filename: 'g.jpg' })).statusCode).toBe(201);
+    expect((await db.select().from(assets).where(eq(assets.originalFilename, 'g.jpg')))[0]).toMatchObject({ tier: 'core', girlsOnly: true });
   });
 });
 

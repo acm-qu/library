@@ -7,6 +7,7 @@ import { useDeleteEvent, useEvent, usePatchEvent } from '../data/library.ts';
 import { useMe } from '../data/session.ts';
 import type { Tier } from '../lib/uploader.ts';
 import { Confirm } from '../ui/Confirm.tsx';
+import { DateInput } from '../ui/DateInput.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import { Skeleton } from '../ui/Skeleton.tsx';
 
@@ -76,14 +77,14 @@ export function EventFields({ form, setForm, errors = {}, tierHelp }: { form: Ev
           <label className="label" htmlFor="ev-d1">
             {t('upload.date')}
           </label>
-          <input className="input tnum" id="ev-d1" type="date" value={form.startsOn} onChange={(e) => setForm({ ...form, startsOn: e.target.value })} {...invalid('startsOn')} />
+          <DateInput id="ev-d1" value={form.startsOn} onChange={(v) => setForm({ ...form, startsOn: v })} {...invalid('startsOn')} />
           <FieldError id="ev-startsOn-e" msg={errors.startsOn} />
         </div>
         <div className="field" style={{ flex: '1 1 200px' }}>
           <label className="label" htmlFor="ev-d2">
             {t('upload.endDate')} <span className="subtle">{t('upload.optional')}</span>
           </label>
-          <input className="input tnum" id="ev-d2" type="date" value={form.endsOn} min={form.startsOn} onChange={(e) => setForm({ ...form, endsOn: e.target.value })} {...invalid('endsOn')} />
+          <DateInput id="ev-d2" clearable value={form.endsOn} min={form.startsOn || undefined} onChange={(v) => setForm({ ...form, endsOn: v })} {...invalid('endsOn')} />
           <FieldError id="ev-endsOn-e" msg={errors.endsOn} />
         </div>
       </div>

@@ -17,6 +17,7 @@ import { HttpError, notFound } from '../lib/errors.ts';
 import { activeJobs, byAsset } from '../lib/queue.ts';
 import { ingest, UnsupportedType } from '../uploads/ingest.ts';
 import { wakeWorker } from '../lib/wake.ts';
+import { girlsOk } from '../policy/visibleSql.ts';
 
 /** Set by Fastify after auth and overwritten on every request, so a client can never supply it. */
 const USER_HEADER = 'x-acm-uploader';
@@ -57,6 +58,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
         eventId: ev.id,
         kind: meta.data.filetype?.startsWith('video/') ? 'video' : 'image',
         tier: meta.data.tier,
+        girlsOnly: meta.data.girlsOnly,
         status: 'uploading',
         originalFilename: meta.data.filename,
         originalMime: meta.data.filetype ?? null,
@@ -188,6 +190,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
           filename: a.originalFilename,
           kind: a.kind,
           tier: a.tier,
+          girlsOnly: a.girlsOnly,
           status: a.status,
           bytes: a.originalSize,
           durationS: a.durationS,
@@ -212,7 +215,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
     const rows = await db
       .select({ filename: assets.originalFilename, bytes: assets.originalSize })
       .from(assets)
-      .where(and(eq(assets.eventId, eventId), isNull(assets.deletedAt), sql`${assets.status} not in ('deleting', 'uploading')`));
+      .where(and(eq(assets.eventId, eventId), isNull(assets.deletedAt), girlsOk(viewerOf(req)), sql`${assets.status} not in ('deleting', 'uploading')`));
     return { items: rows };
   });
 

@@ -117,6 +117,7 @@ export const ProcessingReport = z.object({
     filename: z.string(),
     kind: z.enum(['image', 'video']),
     tier: z.enum(['member', 'core']),
+    girlsOnly: z.boolean(),
     status: z.enum(ASSET_STATUSES),
     eventId: Id,
     eventTitle: z.string(),

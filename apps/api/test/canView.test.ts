@@ -1,4 +1,4 @@
-// The handoff's security checklist: every role × tier × status × deleted combination, for access() and for the
+// The handoff's security checklist: every viewer × tier × status × girls-only × deleted combination, for access() and for the
 // SQL used by lists, which must agree with it exactly.
 import { ASSET_STATUSES, assets, events, TIERS } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
@@ -9,67 +9,69 @@ import { access, atLeast } from '../src/policy/canView.ts';
 import { browsable, listed } from '../src/policy/visibleSql.ts';
 import { addUser, db, resetDb } from './helpers.ts';
 
-type Who = 'member' | 'core' | 'core-uploader' | 'admin';
-const WHO: Who[] = ['member', 'core', 'core-uploader', 'admin'];
+// Uploads come from a male and a female core member; only female core members (admins included) see girls-only rows.
+type Who = 'member' | 'core' | 'core-uploader' | 'admin' | 'core-f' | 'core-f-uploader' | 'admin-f' | 'core-nogender';
+const WHO: Who[] = ['member', 'core', 'core-uploader', 'admin', 'core-f', 'core-f-uploader', 'admin-f', 'core-nogender'];
+const UPLOADERS = ['core-uploader', 'core-f-uploader'] as const;
+const FEMALE = new Set<Who>(['core-f', 'core-f-uploader', 'admin-f']);
+const ADMIN = new Set<Who>(['admin', 'admin-f']);
 
-const expected: Record<string, Record<Who, string>> = {};
-for (const tier of TIERS)
-  for (const status of ASSET_STATUSES) {
-    const row = {} as Record<Who, string>;
-    for (const w of WHO) {
-      let level = 'none';
-      const sees = tier === 'member' || w !== 'member';
-      if (status === 'deleting' || !sees) level = 'none';
-      else if (status === 'ready') level = 'full';
-      else if (status === 'original_only') level = 'download';
-      else if (w === 'core-uploader' || w === 'admin') level = 'status';
-      row[w] = level;
-    }
-    expected[`${tier}/${status}`] = row;
-  }
+function expected(w: Who, tier: string, status: string, girlsOnly: boolean, uploader: Who): string {
+  if (status === 'deleting' || (tier === 'core' && w === 'member') || (girlsOnly && !FEMALE.has(w))) return 'none';
+  if (status === 'ready') return 'full';
+  if (status === 'original_only') return 'download';
+  return w === uploader || ADMIN.has(w) ? 'status' : 'none';
+}
 
 let viewers: Record<Who, Viewer>;
-let uploaderId: string;
 
 beforeAll(async () => {
   await resetDb();
-  const mk = async (email: string, role: 'member' | 'core', isAdmin = false) => {
-    const u = await addUser(email, { role, isAdmin });
-    return { id: u.id, email: u.email, name: u.name, role, isAdmin, status: 'active' } as Viewer;
+  const mk = async (email: string, role: 'member' | 'core', gender: 'male' | 'female' | null, isAdmin = false) => {
+    const u = await addUser(email, { role, isAdmin, gender });
+    return { id: u.id, email: u.email, name: u.name, role, isAdmin, gender, status: 'active' } as Viewer;
   };
   viewers = {
-    member: await mk('m@x.qa', 'member'),
-    core: await mk('c@x.qa', 'core'),
-    'core-uploader': await mk('u@x.qa', 'core'),
-    admin: await mk('a@x.qa', 'core', true),
+    member: await mk('m@x.qa', 'member', null),
+    core: await mk('c@x.qa', 'core', 'male'),
+    'core-uploader': await mk('u@x.qa', 'core', 'male'),
+    admin: await mk('a@x.qa', 'core', 'male', true),
+    'core-f': await mk('cf@x.qa', 'core', 'female'),
+    'core-f-uploader': await mk('uf@x.qa', 'core', 'female'),
+    'admin-f': await mk('af@x.qa', 'core', 'female', true),
+    'core-nogender': await mk('cn@x.qa', 'core', null),
   };
-  uploaderId = viewers['core-uploader'].id;
   const eventId = newId();
-  await db.insert(events).values({ id: eventId, title: 'E', slug: 'e', startsOn: '2026-10-01', createdBy: uploaderId });
+  await db.insert(events).values({ id: eventId, title: 'E', slug: 'e', startsOn: '2026-10-01', createdBy: viewers.core.id });
   const rows = [];
   for (const tier of TIERS)
     for (const status of ASSET_STATUSES)
-      for (const deleted of [false, true])
-        rows.push({ id: newId(), eventId, kind: 'image' as const, tier, status, originalFilename: `${tier}-${status}-${deleted}`, originalExt: 'jpg', uploaderId, deletedAt: deleted ? new Date() : null });
+      for (const girlsOnly of [false, true])
+        for (const up of UPLOADERS)
+          for (const deleted of [false, true])
+            rows.push({ id: newId(), eventId, kind: 'image' as const, tier, girlsOnly, status, originalFilename: `${tier}-${status}-${girlsOnly}-${up}-${deleted}`, originalExt: 'jpg', uploaderId: viewers[up].id, deletedAt: deleted ? new Date() : null });
   await db.insert(assets).values(rows);
 });
 
-describe('access() matrix (4 roles × 2 tiers × 8 statuses × deleted)', () => {
+describe('access() matrix (8 viewers × 2 tiers × 8 statuses × girls-only × 2 uploaders × deleted)', () => {
   for (const tier of TIERS)
     for (const status of ASSET_STATUSES)
-      for (const deleted of [false, true])
-        it(`${tier} · ${status}${deleted ? ' · deleted' : ''}`, () => {
-          for (const w of WHO) {
-            const got = access(viewers[w], { tier, status, uploaderId, deletedAt: deleted ? new Date() : null });
-            expect([w, got]).toEqual([w, deleted ? 'none' : expected[`${tier}/${status}`]![w]]);
-          }
-        });
+      for (const girlsOnly of [false, true])
+        for (const deleted of [false, true])
+          it(`${tier} · ${status}${girlsOnly ? ' · girls-only' : ''}${deleted ? ' · deleted' : ''}`, () => {
+            for (const up of UPLOADERS)
+              for (const w of WHO) {
+                const got = access(viewers[w], { tier, girlsOnly, status, uploaderId: viewers[up].id, deletedAt: deleted ? new Date() : null });
+                expect([w, up, got]).toEqual([w, up, deleted ? 'none' : expected(w, tier, status, girlsOnly, up)]);
+              }
+          });
 
   it('denies disabled users, missing sessions and deleted events', () => {
-    const a = { tier: 'member' as const, status: 'ready' as const, uploaderId, deletedAt: null };
+    const a = { tier: 'member' as const, girlsOnly: false, status: 'ready' as const, uploaderId: viewers.core.id, deletedAt: null };
     expect(access(null, a)).toBe('none');
     expect(access({ ...viewers.admin, status: 'disabled' }, a)).toBe('none');
     expect(access(viewers.admin, a, true)).toBe('none');
+    expect(access({ ...viewers['admin-f'], status: 'disabled' }, { ...a, girlsOnly: true })).toBe('none');
   });
 
   it('orders levels for route guards', () => {

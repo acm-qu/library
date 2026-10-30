@@ -239,10 +239,20 @@ export function Lightbox({ assetId, background, onClose: close, player }: { asse
                 )}
                 {event.data && <span className="t-sm muted">{fmtDate(event.data.startsOn)}</span>}
               </div>
-              {a.tier === 'core' && (
-                <span className="tier">
-                  <Icon name="shield" />
-                  {t('viewer.core')}
+              {(a.tier === 'core' || a.girlsOnly) && (
+                <span className="row" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {a.tier === 'core' && (
+                    <span className="tier">
+                      <Icon name="shield" />
+                      {t('viewer.core')}
+                    </span>
+                  )}
+                  {a.girlsOnly && (
+                    <span className="tier">
+                      <Icon name="person" />
+                      {t('viewer.girlsOnly')}
+                    </span>
+                  )}
                 </span>
               )}
             </div>

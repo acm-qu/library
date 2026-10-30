@@ -6,6 +6,8 @@ import { Id, IsoDateTime, page } from './common.ts';
 export const UploadMetadata = z.object({
   eventId: Id,
   tier: z.enum(TIERS),
+  /** tus metadata values are strings; absent means not girls-only. */
+  girlsOnly: z.enum(['true', 'false']).default('false').transform((s) => s === 'true'),
   filename: z.string().min(1).max(255),
   filetype: z.string().max(255).nullish(),
 });
@@ -20,6 +22,7 @@ export const MyUploadItem = z.object({
   filename: z.string(),
   kind: z.enum(ASSET_KINDS).nullable(),
   tier: z.enum(TIERS),
+  girlsOnly: z.boolean(),
   status: z.enum(ASSET_STATUSES),
   bytes: z.number().int().nullable(),
   durationS: z.number().nullable(),

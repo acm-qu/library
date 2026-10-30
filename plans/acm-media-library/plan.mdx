@@ -342,6 +342,7 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
 - `jobs.priority` backs both kind-based ordering and "Move to the top".
 - `jobs.outcome` records a job that finished by sending its asset to review.
 - `users.gender` (nullable, check male|female) is asked for on first sign-in, together with the name.
+- `assets.girls_only` (boolean, not null, default false; migration `0004`) marks an item only female core members may see. It narrows who sees the item; the tier still decides encryption, so toggling it re-seals nothing.
 - `access_requests` holds "Request access" submissions from the sign-in screen until an admin approves or rejects them.
 
 <DataModel
@@ -406,6 +407,7 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
       { name: "event_id", type: "uuid", fk: "events.id" },
       { name: "kind", type: "text check image|video" },
       { name: "tier", type: "text check member|core" },
+      { name: "girls_only", type: "boolean default false" },
       { name: "status", type: "text check uploading|queued|processing|ready|failed|needs_review|original_only|deleting" },
       { name: "original_filename / mime / size / ext", type: "text · bigint" },
       { name: "original_sha256", type: "bytea" },
@@ -506,6 +508,8 @@ Every media route, asset read and HLS key request goes through one pure function
 
 Anything below the route's minimum is **404**, never 403. The design repeats this rule: signed-out visitors never learn that core items exist.
 
+**Girls only.** A girls-only item is visible only to an active, signed-in core viewer whose gender is female (female admins included). Everyone else gets `none`, so 404, whatever the tier: male core members, male admins, viewers without a gender, signed-out visitors, and a male uploader of the item. The same rule sits in `access()` and in the SQL twin (`tierOk` in `visibleSql.ts`), so counts, covers, grids and search agree. An event whose only items are girls-only is hidden from those viewers (core members otherwise see empty events). My uploads lists a viewer's own uploads without `access()` and carries only status, never media URLs, so a male uploader still sees his row there. Admin › Item and its actions (re-process, resolve, frames) 404 for a male admin; Admin › Processing keeps the job row, its counts and cancel, retry and move-to-top, but sends no item details (no filename, event or thumbnail).
+
 Read routes need no sign-in. `readerOf()` in `apps/api/src/auth/plugin.ts` turns a request without a session into `ANON`, an active member-role viewer that matches no uploader, so member-tier items are public and everything else follows the same table. Account, upload and admin routes still need a core session. There are no member accounts any more: every account is core, admin is a flag on top, and an old member row can't sign in.
 
 <Table
@@ -521,10 +525,11 @@ Read routes need no sign-in. `readerOf()` in `apps/api/src/auth/plugin.ts` turns
     ["any, user disabled (their sessions are deleted)", "reads as signed out", "reads as signed out", "reads as signed out", "reads as signed out"],
     ["account, upload or admin route without a session", "401", "—", "—", "—"],
     ["signed in, name or gender missing", "—", "reads as signed out; core and admin routes 409 profile_incomplete", "same", "same"],
+    ["girls-only, any tier", "404", "female: as above · male or no gender: 404", "female: as above · male: 404 (My uploads keeps a status row)", "female: as above · male: 404; queue row without details"],
   ]}
 />
 
-Signed-out visitors also never see uploader names. The test suite enumerates every role × tier × status × deleted combination (4 × 2 × 8 × 2 = 128 cases) against this table, as the handoff's security checklist requires.
+Signed-out visitors also never see uploader names. The test suite enumerates every viewer × tier × status × girls-only × uploader × deleted combination (8 viewers: signed out, male and female core, male and female uploader, male and female admin, core without gender; 2 × 8 × 2 × 2 × 2 = 128 asset rows) against this table, as the handoff's security checklist requires.
 
 ### Asset lifecycle
 
@@ -616,7 +621,7 @@ Sessions slide: each authenticated request refreshes `expires_at` at most once a
   participant T as API /api/uploads (tus)
   participant F as ~/media/tus
   participant D as Postgres
-  U->>T: POST (Upload-Length, metadata eventId, tier, filename, filetype)
+  U->>T: POST (Upload-Length, metadata eventId, tier, girlsOnly, filename, filetype)
   T->>T: onIncomingRequest: requireCore, event exists, tier allowed, size ≤ 20 GiB, an existing id must be the caller's (else 404)
   T->>F: create <id> + <id>.json
   T->>D: onUploadCreate: insert asset (uploading, upload_id = <id>)
@@ -647,6 +652,8 @@ The probe fills `duration_s`, `hdr`, `width` and `height` straight away, which i
 SHA-256 is the worker's first step for every job. A match within the same event sets `duplicate_of`, and the upload and My uploads screens show the duplicate warning from the next poll.
 
 **Resume on phones.** Re-picking from the iOS photo library can change a file's name and `lastModified`, which defeats Uppy's fingerprint. So the resume banner matches re-picked files to the event's `uploading` rows by original filename and size, and continues with that row's tus id. The file input's `accept` lists `image/heic` and `video/quicktime`, so iOS sends originals instead of transcoding them. Milestone 4 checks this on a real iPhone: originals must arrive byte-identical, and HLG must survive.
+
+**Girls only.** The add-files step has one "Girls only" checkbox for the whole batch ("Only female core members and admins can see these"). It goes out as tus metadata `girlsOnly` = `true` or `false` on every file, and `onUploadCreate` stores it in `assets.girls_only` (absent means false). Tiles, My uploads rows and the viewer's info panel show a "Girls only" marker to the people who can see the item; Admin › Item has a toggle that PATCHes `girlsOnly` and is audited as `asset.girls_only`.
 
 **Two uploads at a time, at most one video.** The host's disk IO is capped at 30 MB/s, so the client starts up to two files in parallel and never two videos at once.
 
@@ -963,7 +970,7 @@ Endpoints and parameters this plan adds or changes:
   - `needs_review` → the asset's status, joined with its job (whose `outcome` is `needs_review`);
   - `recent` → `state = done`, last 7 days.
 - **Automatic tone curves.** `PATCH /admin/settings` accepts `tonemap_auto` either way, and the worker uses automatic selection whenever it is on. The validation gate's result (`gate-passed.json`) is shown next to the checkbox as information only.
-- **Audit coverage.** Every admin mutation, every tier change (including a core member changing the tier of their own upload) and every delete writes `audit_log`.
+- **Audit coverage.** Every admin mutation, every tier or girls-only change (including a core member changing their own upload) and every delete writes `audit_log`.
 - **Accounts.** `POST /admin/users` and `/admin/users/bulk` take `isAdmin`, not a role: every new account is core. Editing an old member row makes it core, so the admin flag is always valid.
 - **Last-admin guard.** It runs under `SELECT … FOR UPDATE` on the admin rows, so two admins can't demote each other at the same moment.
 
@@ -1137,6 +1144,7 @@ Interaction details the artboards imply and the code must honor:
 - **Justified grid.** Rows are computed from `width` / `height` before images load, and virtualized with `@tanstack/react-virtual` by row. The next page is fetched when the last virtual row comes within two screens of the viewport. This is how the grid stays smooth at tens of thousands of items.
 - **Resume after closing the tab.** The upload screen reads Uppy's stored tus fingerprints at mount. For each one, it compares `HEAD` offsets with the event's server-side assets, and shows "Resume N unfinished uploads" when any remain. Picking the same files continues from the stored offsets.
 - **Keyboard.** The lightbox traps focus. Arrow keys, I, Z and Esc are bound to the dialog element, not to `window`. Tables and tabs follow the WAI-ARIA patterns, and `prefers-reduced-motion` disables the shimmer and transitions, matching `app.css`.
+- **Selects and dates.** There are no native `<select>` or date inputs: `ui/Select.tsx` (a button opening a listbox, `input` and `chip` variants, type-ahead) and `ui/DateInput.tsx` (a month calendar with a locale first weekday, min/max, Today and Clear, arrow keys mirrored in RTL) follow the WAI-ARIA listbox and date-picker dialog patterns and keep the forms' `YYYY-MM-DD` strings; the calendar math is pure (`ui/calendar.ts`, unit-tested).
 - **Alt text.** Alt text falls back to "Photo from ‹event title›, ‹date›" when there is nothing better.
 - **Loading and motion.** Every screen has a skeleton loading state and images fade in. Page entrance animates the content only: admin screens share the shell's page key, so the side nav stays still. Nav, side nav, tab bar and screen tabs use one indicator that slides to the current tab (`useTabIndicator`). Modals (Edit event, the session-expired dialog, inline confirmations) rise and fade in over 0.32 s with a backdrop fade, and the Edit event dialog sinks and fades out over 0.18 s before it closes, Esc included. In the viewer, zoom scales the photo in place with a 0.45 s ease-out (to 100% of its own pixels, at least 1.5×), anchored where you click; moving the pointer or dragging pans it, and the previous/next arrows and key hints fade out until you zoom out, so nothing but the photo moves. All of it is off under reduced motion.
 - **Polling.** Lists that show unfinished work poll every 15 s, and only while something is unfinished.
@@ -1239,6 +1247,7 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
     ["torch and pyiqa", "Installed in Milestone 10, when automatic tone-curve selection is built"],
     ["First admin", "tech@qu.acm.org, created by scripts/bootstrap-admin.ts"],
     ["Upload client", "tus-js-client directly (the library Uppy's tus plugin wraps) behind the design's own upload screens; Uppy's dashboard UI isn't used, so it is left out"],
+    ["Girls only", "A batch checkbox on the Upload screen (sent as tus metadata girlsOnly for every file) and a toggle in Admin › Item through PATCH /api/assets/:id. Only female core members and admins see these items; male admins get 404 and a queue row without details. The tier still controls encryption"],
     ["Event visibility for signed-out visitors", "Signed-out visitors see an event only when it holds something they can see; core members see every event, including empty ones to upload into"],
     ["React Router", "v7: v8 requires React 19, and the handoff fixes React 18"],
     ["Local dev ports", "API 3080 and Vite 5180 (strict), because 3000 and 5173 are commonly taken"],

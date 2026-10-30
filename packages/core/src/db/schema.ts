@@ -162,6 +162,8 @@ export const assets = pgTable(
       .references(() => events.id),
     kind: text('kind', { enum: ASSET_KINDS }).notNull(),
     tier: text('tier', { enum: TIERS }).notNull(),
+    /** Visible only to female core members (admins included only if female); tier still decides encryption. */
+    girlsOnly: boolean('girls_only').notNull().default(false),
     status: text('status', { enum: ASSET_STATUSES }).notNull(),
     originalFilename: text('original_filename').notNull(),
     originalMime: text('original_mime'),

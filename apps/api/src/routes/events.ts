@@ -11,7 +11,8 @@ import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { mediaUrl } from '../lib/dto.ts';
 import { HttpError, notFound } from '../lib/errors.ts';
 import { baseSlug, withSuffix } from '../lib/slug.ts';
-import { browsable } from '../policy/visibleSql.ts';
+import { seesGirlsOnly } from '../policy/canView.ts';
+import { browsable, girlsOk } from '../policy/visibleSql.ts';
 
 const EventCursor = z.object({ s: z.string(), i: z.string() });
 
@@ -34,11 +35,14 @@ type Row = {
 
 /**
  * Events with per-viewer counts and cover. Members only see events that contain something they can see;
- * core members see every event, including empty ones they may upload to.
+ * core members see every event, including empty ones they may upload to, except one holding only girls-only
+ * items they may not see.
  */
 async function queryEvents(db: Db, v: Viewer, where: SQL[], limit: number): Promise<Row[]> {
   const vis = browsable(v);
-  const memberFilter = v.role === 'core' ? sql`true` : sql`(c.photo_count + c.video_count) > 0`;
+  const visible = sql`(c.photo_count + c.video_count) > 0`;
+  const hiddenGirls = sql`exists (select 1 from ${assets} where ${assets.eventId} = events.id and ${assets.deletedAt} is null and ${assets.girlsOnly})`;
+  const memberFilter = v.role !== 'core' ? visible : seesGirlsOnly(v) ? sql`true` : sql`(${visible} or not ${hiddenGirls})`;
   const res = await db.execute<Row>(sql`
     select events.id, events.slug, events.title, events.starts_on::text as starts_on, events.ends_on::text as ends_on, events.location, events.description,
            events.default_tier, events.cover_asset_id, c.photo_count, c.video_count, c.core_count, cov.id as cover_id, cov.rendition_rev as cover_rev
@@ -148,6 +152,7 @@ export function eventRoutes(app: FastifyInstance, { db }: { db: Db }) {
     const body = PatchEventBody.parse(req.body);
     const [ev] = await db.select().from(events).where(and(eq(events.id, id), isNull(events.deletedAt)));
     if (!ev) throw notFound();
+    await findVisibleEvent(db, v, id); // an event hidden from this viewer (only girls-only items) is a 404 here too
     const startsOn = body.startsOn ?? ev.startsOn;
     const endsOn = body.endsOn === undefined ? ev.endsOn : body.endsOn;
     if (endsOn && endsOn < startsOn) throw new HttpError('bad_request', { fields: { endsOn: 'ends_before_start' } });
@@ -155,7 +160,7 @@ export function eventRoutes(app: FastifyInstance, { db }: { db: Db }) {
       const [cover] = await db
         .select({ id: assets.id })
         .from(assets)
-        .where(and(eq(assets.id, body.coverAssetId), eq(assets.eventId, id), eq(assets.status, 'ready'), isNull(assets.deletedAt)));
+        .where(and(eq(assets.id, body.coverAssetId), eq(assets.eventId, id), eq(assets.status, 'ready'), isNull(assets.deletedAt), girlsOk(v)));
       if (!cover) throw new HttpError('bad_request', { fields: { coverAssetId: 'not_a_ready_item_of_this_event' } });
     }
     await db.transaction(async (tx) => {
@@ -168,6 +173,7 @@ export function eventRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.delete('/api/events/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const v = viewerOf(req);
     const { id } = z.object({ id: Id }).parse(req.params);
+    await findVisibleEvent(db, v, id); // same 404 as the page for an event this admin can't see
     await db.transaction(async (tx) => {
       const [ev] = await tx.update(events).set({ deletedAt: new Date() }).where(and(eq(events.id, id), isNull(events.deletedAt))).returning({ id: events.id });
       if (!ev) throw notFound();

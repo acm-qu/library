@@ -12,6 +12,7 @@ export const AssetTile = z.object({
   id: Id,
   kind: z.enum(ASSET_KINDS),
   tier: z.enum(TIERS),
+  girlsOnly: z.boolean(),
   status: z.enum(ASSET_STATUSES),
   width: z.number().int().nullable(),
   height: z.number().int().nullable(),
@@ -48,6 +49,6 @@ export const AssetDetail = AssetTile.extend({
 export type AssetDetail = z.infer<typeof AssetDetail>;
 
 export const PatchAssetBody = z
-  .object({ tier: z.enum(TIERS), eventId: Id })
+  .object({ tier: z.enum(TIERS), girlsOnly: z.boolean(), eventId: Id })
   .partial()
-  .refine((b) => b.tier !== undefined || b.eventId !== undefined, { message: 'empty_patch' });
+  .refine((b) => b.tier !== undefined || b.girlsOnly !== undefined || b.eventId !== undefined, { message: 'empty_patch' });

@@ -17,6 +17,7 @@ export function toTile(v: Viewer, a: Asset, job: ActiveJob | undefined): AssetTi
     id: a.id,
     kind: a.kind,
     tier: a.tier,
+    girlsOnly: a.girlsOnly,
     status: a.status,
     width: a.width,
     height: a.height,

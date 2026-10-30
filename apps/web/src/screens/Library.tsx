@@ -8,6 +8,7 @@ import { useMe } from '../data/session.ts';
 import { fmtDate } from '../i18n/format.ts';
 import { Icon } from '../ui/Icon.tsx';
 import { SearchBox } from '../ui/SearchBox.tsx';
+import { Select } from '../ui/Select.tsx';
 import { fadeIn, revealIndex, Skeleton } from '../ui/Skeleton.tsx';
 
 export function LibraryScreen() {
@@ -58,14 +59,13 @@ export function LibraryScreen() {
       <label className="vh" htmlFor="yr">
         {t('library.year')}
       </label>
-      <select id="yr" className="chip" style={{ paddingInlineEnd: 8 }} value={year ?? ''} onChange={(e) => set('year', e.target.value || null)}>
-        <option value="">{t('library.allYears')}</option>
-        {years.data?.years.map((y) => (
-          <option key={y} value={y}>
-            {y}
-          </option>
-        ))}
-      </select>
+      <Select
+        id="yr"
+        variant="chip"
+        value={year ? String(year) : ''}
+        options={[{ value: '', label: t('library.allYears') }, ...(years.data?.years ?? []).map((y) => ({ value: String(y), label: String(y) }))]}
+        onChange={(v) => set('year', v || null)}
+      />
       <button className="chip" aria-pressed={hasVideos} onClick={() => set('videos', hasVideos ? null : '1')}>
         <Icon name="video" size="sm" />
         {t('library.hasVideos')}

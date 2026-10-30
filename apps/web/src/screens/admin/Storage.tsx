@@ -7,6 +7,7 @@ import * as api from '../../api/admin.ts';
 import { useAdminMutation, useSettings, useStorage } from '../../data/admin.ts';
 import { fmtBytes, fmtDateTime } from '../../i18n/format.ts';
 import i18n from '../../i18n/index.ts';
+import { Icon } from '../../ui/Icon.tsx';
 import { Skeleton, SkeletonRows } from '../../ui/Skeleton.tsx';
 
 const fmtInt = (n: number) => new Intl.NumberFormat(i18n.language).format(n);
@@ -17,6 +18,17 @@ export function StorageScreen() {
   const settings = useSettings().data;
   const save = useAdminMutation((b: Parameters<typeof api.patchSettings>[0]) => api.patchSettings(b));
   const [limit, setLimit] = useState('');
+  // The tone-curve checkbox flips at once and says "Saving…" until the server's settings agree, or flips back on error.
+  const [curve, setCurve] = useState<boolean | null>(null);
+  const [curveState, setCurveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  useEffect(() => {
+    if (curve !== null && settings?.tonemapAuto === curve) (setCurve(null), setCurveState('saved'));
+  }, [settings?.tonemapAuto, curve]);
+  const toggleCurve = (on: boolean) => {
+    setCurve(on);
+    setCurveState('saving');
+    save.mutate([{ tonemapAuto: on }], { onError: () => (setCurve(null), setCurveState('error')) });
+  };
   useEffect(() => {
     document.title = `${t('admin.storage')} · ${t('brand')}`;
   }, [t]);
@@ -220,14 +232,30 @@ export function StorageScreen() {
             <input
               type="checkbox"
               className="check"
-              checked={settings.tonemapAuto}
+              checked={curve ?? settings.tonemapAuto}
               aria-describedby="curve-help"
-              onChange={(e) => save.mutate([{ tonemapAuto: e.target.checked }])}
+              disabled={curveState === 'saving'}
+              onChange={(e) => toggleCurve(e.target.checked)}
             />
             <span className="t-sm">{t('admin.s_curveLabel')}</span>
+            <span className="t-sm muted row" style={{ gap: 6 }} role="status" aria-live="polite">
+              {curveState === 'saving' && (
+                <>
+                  <Icon name="spinner" className="spin" size="sm" />
+                  {t('admin.s_saving')}
+                </>
+              )}
+              {curveState === 'saved' && (
+                <>
+                  <Icon name="check" size="sm" style={{ color: 'var(--ok)' }} />
+                  {t('admin.s_saved')}
+                </>
+              )}
+              {curveState === 'error' && <span style={{ color: 'var(--danger)' }}>{t('admin.s_saveFailed')}</span>}
+            </span>
           </label>
           <span id="curve-help" className="help">
-            {settings.tonemapAuto ? t('admin.s_curveOn') : t('admin.s_curveOff')} {settings.tonemapGatePassed ? t('admin.s_curveGatePassed') : t('admin.s_curveGatePending')}
+            {(curve ?? settings.tonemapAuto) ? t('admin.s_curveOn') : t('admin.s_curveOff')} {settings.tonemapGatePassed ? t('admin.s_curveGatePassed') : t('admin.s_curveGatePending')}
           </span>
         </section>
       )}
