@@ -1,0 +1,686 @@
+---
+title: "Rebuilding the ACM Media Library for student maintainers"
+summary: "A from-scratch rewrite of the same product, same database and same files on disk, organised so a new student can read the system from a root design README down to one README per subsystem."
+status: draft
+---
+
+# Rebuilding the ACM Media Library for student maintainers
+
+**Objective.** Rewrite the library so that a second-year student who has never seen it can understand the whole system in an afternoon and change one part safely in a week. The product does not change: signed-out visitors browse Public photos and videos, core members sign in with an emailed code and see encrypted core-tier items, and admins run members, events, the processing queue and storage. What changes is how the code is arranged and explained.
+
+**The approach in one sentence.** Keep every decision that is expensive to undo (database schema, files on disk, encryption format, URLs, environment variables), and rebuild the code around it as three small TypeScript packages and one Python package, organised by feature, with short files, descriptive names, very few comments, and a README in every folder that holds a real subsystem.
+
+**Done means:**
+- The root `README.md` explains the whole system with diagrams, and links to 15 subsystem READMEs that each explain one part at the level of tables, byte layouts and state machines.
+- No source file is over 200 lines. Comments only say *why* in one line where code cannot; the longer reasons are in the folder's README.
+- The new code runs on the production database and `~/media` folder without a data migration, and the previous release can still be restored by flipping the `current` symlink.
+- Every existing test (Vitest for api, worker and core; pytest for `mediaworker`) is ported and green, plus an API parity check against the current release and the one-event smoke test.
+
+A few decisions are still open; they are in **Open Questions** at the bottom with a recommended default for each.
+
+### A new maintainer's first hour
+
+Sara joins the chapter's tech team in September. She opens the repo on GitHub and the root README is the first thing she sees. It starts with one paragraph about what the library is, then a system diagram (the one below), then "the life of a photo": upload in the browser, tus chunks into `~/media/tus`, ingest writes an `assets` row and a `jobs` row, the cron worker runs `mediaworker` to make WebP copies, and the API serves them through one access check. Each step is a link.
+
+She is asked to fix a bug where a core video's poster shows up for a signed-out visitor. The root README's "where things live" table sends her to `server/src/access/README.md`, which has the full access matrix as a table and explains the 404-never-403 rule. The code next to it is two files of about 40 lines each with no header essay, because the README already said why. She adds a row to `access.test.ts`, which is in the same folder, and fixes the bug. She never had to read the encryption or video code.
+
+## The system at a glance
+
+This diagram is the centrepiece of the root README. It shows every running process, where state lives, and how they talk. It is the same system that runs today; only the package names on the boxes are new.
+
+<Diagram id="sys-context" frame="show" caption="System context for the root README. Three regions: what runs in the visitor's browser, what runs on the cPanel account, and where state is kept.">
+
+```html
+<div class="sys">
+  <div class="diagram-panel region" data-rough>
+    <div class="diagram-pill">Browser</div>
+    <div class="diagram-card"><b>web/</b><br><span class="diagram-muted">React SPA, Darkroom Archive</span></div>
+    <div class="diagram-card"><b>tus client</b><br><span class="diagram-muted">8 MiB resumable chunks</span></div>
+    <div class="diagram-card"><b>hls.js player</b><br><span class="diagram-muted">AES-128 keys for core</span></div>
+  </div>
+  <div class="link"><span>HTTPS</span><span class="diagram-muted">/api/*</span><span class="arrow">&#8594;</span></div>
+  <div class="diagram-panel region" data-rough>
+    <div class="diagram-pill">cPanel account (CageFS)</div>
+    <div class="pair">
+      <div class="diagram-box">LiteSpeed + Passenger</div>
+      <div class="diagram-node"><b>server/api.ts</b><br><span class="diagram-muted">Fastify 5, one process</span></div>
+    </div>
+    <div class="pair">
+      <div class="diagram-box">cron, every minute, flock</div>
+      <div class="diagram-node"><b>server/worker.ts</b><br><span class="diagram-muted">one job at a time</span></div>
+    </div>
+    <div class="pair">
+      <div class="diagram-node"><b>mediaworker</b><br><span class="diagram-muted">Python, JSON on stdout</span></div>
+      <div class="diagram-node"><b>ffmpeg</b><br><span class="diagram-muted">~/bin, HLS ladder</span></div>
+    </div>
+  </div>
+  <div class="link"><span>SQL / files</span><span class="arrow">&#8594;</span></div>
+  <div class="diagram-panel region" data-rough>
+    <div class="diagram-pill">State</div>
+    <div class="diagram-card"><b>PostgreSQL 9.6</b><br><span class="diagram-muted">users, events, assets, jobs</span></div>
+    <div class="diagram-card"><b>~/media</b><br><span class="diagram-muted">originals, renditions, HLS</span></div>
+    <div class="diagram-card"><b>shared/.env</b><br><span class="diagram-muted">MASTER_KEY, OTP_PEPPER</span></div>
+  </div>
+</div>
+```
+
+```css
+.sys { display: grid; grid-template-columns: 1fr auto 1.4fr auto 1fr; gap: 12px; align-items: center; }
+.region { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.link { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 12px; color: var(--wf-muted); }
+.arrow { font-size: 22px; color: var(--wf-accent); }
+@media (max-width: 720px) { .sys { grid-template-columns: 1fr; } .arrow { transform: rotate(90deg); } }
+```
+
+</Diagram>
+
+The root README also carries a second, smaller picture: **the life of a photo**, as a numbered list with links (upload, ingest, queue, process, serve). A numbered list is the right form there because it really is a sequence.
+
+## What stays exactly the same
+
+<Callout id="keep-bets" tone="decision">
+
+**The rewrite keeps every contract that production data or other people depend on.** It reuses the current database schema (migrations `0000` to `0002` copied verbatim as the baseline), the `~/media/assets/<shard>/<id>/` layout, the ACMENC01 file format and wrapped keys, the HLS packaging, every URL a user may have bookmarked or shared, the session cookie, and the names in `shared/.env`. That is what makes the rewrite deployable as an ordinary release and reversible with `scripts/deploy.sh --rollback <sha>`.
+
+</Callout>
+
+<Table
+  id="keep-table"
+  columns={["Contract", "Where it is defined today", "Why it cannot change in the rewrite"]}
+  rows={[
+    ["Database schema (11 tables, text + CHECK statuses, UUID v7 ids)", "packages/core/src/db/schema.ts, migrations/0000-0002", "Production rows exist; migrations are additive only so a rollback still runs."],
+    ["Files on disk", "packages/core/src/paths.ts", "Originals and renditions are already written under these paths; renditions.rel_path stores them."],
+    ["ACMENC01 sealed files and wrapped keys", "packages/core/src/crypto/aeadFile.ts, keys.ts", "Core originals on disk are encrypted in this format; asset_keys holds keys wrapped by MASTER_KEY."],
+    ["HLS single_file + AES-128", "docs/decisions/hls-packaging.md, apps/worker/src/lib/ffmpeg.ts", "Existing core videos are packaged this way."],
+    ["URLs", "apps/api/src/routes/*.ts, apps/web/src/routes/screens.tsx", "/events/:slug and /p/:assetId links are shared in chats; /api/media/* is in cached playlists."],
+    ["Session cookie and OTP pepper", "apps/api/src/auth/sessions.ts, otp.ts", "Changing them signs everyone out and invalidates codes in flight."],
+    ["Env names in shared/.env", "packages/core/src/config.ts", "The server's .env (chmod 600) is the only place secrets live."],
+  ]}
+/>
+
+## Target repo layout
+
+Today there are four TypeScript workspaces (`packages/core`, `apps/api`, `apps/worker`, `apps/web`) and a rule in `CLAUDE.md` that the web app may only import some folders of `core`. The rewrite has three: `shared` is the browser-safe part of today's `core`, `server` is the API and the worker together (they already share the database, crypto, paths and config), and `web` is the SPA. The import rule becomes a package boundary, so nobody has to remember it.
+
+Inside `server/src`, code is grouped **by feature, not by layer**: everything about uploads is in `uploads/`, with its routes, its logic, its tests and its README side by side. Students fix bugs by feature ("uploads stall"), so the folder they open should hold the whole feature.
+
+<FileTree
+  id="target-tree"
+  title="Target layout (README.md files are the new documentation)"
+  entries={[
+    { path: "README.md", change: "added", note: "High-level system design: what, who, diagrams, life of a photo, the five rules, where things live, quickstart." },
+    { path: "CLAUDE.md", change: "modified", note: "Shrinks to commands plus 'read the README in the folder you touch'." },
+    { path: "docs/security.md", note: "Threat model stays cross-cutting." },
+    { path: "docs/decisions/hls-packaging.md", note: "ADRs stay as the history of why." },
+    { path: "docs/decisions/tone-curves.md" },
+    { path: "shared/README.md", change: "added", note: "Browser-safe package: enums, zod API contract, status labels, ETA." },
+    { path: "shared/src/enums.ts" },
+    { path: "shared/src/api/events.ts", note: "One zod file per API area; the request and response types both sides use." },
+    { path: "shared/src/status.ts" },
+    { path: "shared/src/eta.ts" },
+    { path: "server/README.md", change: "added", note: "Two entry points, feature folders, plugin order, error shape, env table." },
+    { path: "server/src/api.ts", note: "Fastify entry, loaded by Passenger's start.cjs." },
+    { path: "server/src/worker.ts", note: "Cron entry: one tick of the job runner." },
+    { path: "server/src/config.ts" },
+    { path: "server/src/db/README.md", change: "added", note: "PostgreSQL 9.6 rules, ids, migrations, search." },
+    { path: "server/src/db/schema/users.ts", note: "Schema split by table group; was one 288-line file." },
+    { path: "server/src/db/schema/assets.ts" },
+    { path: "server/src/db/schema/jobs.ts" },
+    { path: "server/src/db/migrations/0000_init.sql", note: "Copied verbatim from migrations/." },
+    { path: "server/src/access/README.md", change: "added", note: "The access matrix and the 404 rule." },
+    { path: "server/src/access/accessLevel.ts" },
+    { path: "server/src/access/visibleSql.ts" },
+    { path: "server/src/access/access.test.ts", note: "Tests live next to the code they test." },
+    { path: "server/src/auth/README.md", change: "added", note: "OTP, sessions, CSRF, rate limits." },
+    { path: "server/src/crypto/README.md", change: "added", note: "ACMENC01 layout, key wrapping, HLS keys." },
+    { path: "server/src/library/events.routes.ts", note: "Events, assets and search (covered by server/README.md)." },
+    { path: "server/src/media/README.md", change: "added", note: "Byte serving, Range over encrypted files, HLS URLs." },
+    { path: "server/src/uploads/README.md", change: "added", note: "tus, sniffing, probe, ingest." },
+    { path: "server/src/jobs/README.md", change: "added", note: "Queue state machine, runner, job kinds, process hygiene." },
+    { path: "server/src/jobs/kinds/video.ts" },
+    { path: "server/src/admin/members.routes.ts", note: "admin.ts (420 lines) becomes members, queue, items, storage, settings." },
+    { path: "server/src/cron/cleanup.ts", note: "Hourly and nightly scripts: cleanup, stats." },
+    { path: "web/README.md", change: "added", note: "Layering rule, routes, query keys, uploader, i18n and RTL." },
+    { path: "web/src/api/client.ts" },
+    { path: "web/src/data/library.ts" },
+    { path: "web/src/screens/upload/UploadScreen.tsx", note: "Big screens become folders of small step components." },
+    { path: "web/src/ui/README.md", change: "added", note: "Darkroom Archive tokens and the component inventory." },
+    { path: "mediaworker/README.md", change: "added", note: "The CLI contract: commands, JSON out, error codes, venv." },
+    { path: "mediaworker/mediaworker/images.py" },
+    { path: "mediaworker/mediaworker/tonemap/README.md", change: "added", note: "HDR for students: what tone mapping is, the curves, the LUT tables." },
+    { path: "deploy/README.md", change: "added", note: "Absorbs docs/ops.md: server layout, deploy, rollback, cron, backups, troubleshooting." },
+    { path: "deploy/deploy.sh", change: "renamed", note: "Moved from scripts/deploy.sh so all ops files sit together." },
+    { path: "deploy/crontab.template" },
+    { path: "scripts/dev.mjs", note: "Developer-only scripts: dev, seed, bootstrap-admin, rotate-master-key, check-readmes." },
+  ]}
+/>
+
+<Table
+  id="move-map"
+  columns={["Today", "After the rewrite"]}
+  rows={[
+    ["packages/core/src/{enums,schemas,status,eta}.ts", "shared/src/ (zod schemas renamed by API area: shared/src/api/*.ts)"],
+    ["packages/core/src/{db,crypto,config,paths,ids}.ts", "server/src/{db,crypto,config.ts,paths.ts,db/ids.ts}"],
+    ["apps/api/src/routes/*.ts + lib/*.ts", "server/src/<feature>/*.routes.ts; generic helpers in server/src/http/"],
+    ["apps/api/src/policy/canView.ts + visibleSql.ts", "server/src/access/"],
+    ["apps/worker/src/{runner,run,context}.ts + jobs/*.ts", "server/src/jobs/ (runner, claim, kinds/)"],
+    ["apps/worker/src/{cleanup,stats}*.ts", "server/src/cron/"],
+    ["apps/api/test, apps/worker/test, packages/core/test", "*.test.ts next to the file they test"],
+    ["apps/web/src", "web/src (same api / data / screens / ui layering)"],
+    ["py/mediaworker", "mediaworker/"],
+    ["docs/ops.md + deploy/ + scripts/deploy.sh", "deploy/README.md + deploy/*"],
+    ["docs/HANDOFF.md, docs/DESIGN-HANDOFF.md", "Archived to docs/history/: requirements that are now explained by the READMEs"],
+  ]}
+/>
+
+## The README system
+
+There are three levels, and each level answers a different question. The root answers *what is this and how do the parts fit*. A package README answers *how is this package organised and how do I run it*. A subsystem README answers *exactly how does this one mechanism work and what will break if I change it*. A reader goes down only as far as the task needs.
+
+<Diagram id="readme-map" frame="show" caption="README levels. Each lower README links back up to the root diagram and never repeats it.">
+
+```html
+<div class="levels">
+  <div class="lvl">
+    <div class="diagram-pill">Level 0 &middot; system</div>
+    <div class="row one"><div class="diagram-node wide"><b>README.md</b><br><span class="diagram-muted">system diagram, life of a photo, five rules, where things live</span></div></div>
+  </div>
+  <div class="lvl">
+    <div class="diagram-pill">Level 1 &middot; package</div>
+    <div class="row five">
+      <div class="diagram-card"><b>shared/</b></div>
+      <div class="diagram-card"><b>server/</b></div>
+      <div class="diagram-card"><b>web/</b></div>
+      <div class="diagram-card"><b>mediaworker/</b></div>
+      <div class="diagram-card"><b>deploy/</b></div>
+    </div>
+  </div>
+  <div class="lvl">
+    <div class="diagram-pill">Level 2 &middot; subsystem</div>
+    <div class="row five">
+      <div class="stack"><span class="diagram-muted">shared has no level 2</span></div>
+      <div class="stack">
+        <div class="diagram-box">db</div><div class="diagram-box">auth</div><div class="diagram-box">access</div>
+        <div class="diagram-box">crypto</div><div class="diagram-box">media</div><div class="diagram-box">uploads</div><div class="diagram-box">jobs</div>
+      </div>
+      <div class="stack"><div class="diagram-box">ui</div></div>
+      <div class="stack"><div class="diagram-box">tonemap</div></div>
+      <div class="stack"><span class="diagram-muted">docs/security.md and docs/decisions/ sit beside these</span></div>
+    </div>
+  </div>
+</div>
+```
+
+```css
+.levels { display: flex; flex-direction: column; gap: 14px; }
+.lvl { display: flex; flex-direction: column; gap: 8px; }
+.row { display: grid; gap: 10px; }
+.row.one { grid-template-columns: 1fr; }
+.row.five { grid-template-columns: repeat(5, 1fr); }
+.wide { text-align: center; }
+.stack { display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 720px) { .row.five { grid-template-columns: 1fr 1fr; } }
+```
+
+</Diagram>
+
+<Table
+  id="readme-table"
+  columns={["README", "Covers", "Moved here from today"]}
+  rows={[
+    ["README.md", "What the library is; visitor / core / admin; system diagram; life of a photo; the five rules (PG 9.6, additive migrations, 404 not 403, pages never fetch, never log secrets); where-things-live table; quickstart (db:up, migrate, bootstrap-admin, dev).", "CLAUDE.md, HANDOFF.md sections 0-4"],
+    ["shared/README.md", "Why a browser-safe package exists; how each enum feeds both a zod schema and a DB CHECK; the zod files as the API contract; status labels and the ETA formula.", "Header comments in enums.ts, eta.ts"],
+    ["server/README.md", "api.ts and worker.ts entry points; feature-folder layout; Fastify plugin order (helmet, cookie, rate limit, auth, CSRF); the error JSON shape; env variable table.", "apps/api/src/app.ts comments, HANDOFF.md sections 10 and 12"],
+    ["server/src/db/README.md", "PG 9.6 forbidden-features list with what to use instead; UUID v7; text + CHECK; how to add a migration; a worked two-release rename; full-text search.", "CLAUDE.md rules, HANDOFF.md section 5"],
+    ["server/src/auth/README.md", "OTP flow as a numbered sequence; peppered HMAC codes; decoy rows for unknown emails; timing floor; rate limits; hashed session tokens; CSRF header; what must never be logged.", "docs/security.md (sign-in), otp.ts and sessions.ts comments"],
+    ["server/src/access/README.md", "The access matrix (viewer type by asset tier and status, giving none / status / download / full); why 404 and not 403; the SQL twin and the matrix test that keeps them equal.", "canView.ts and visibleSql.ts header comments"],
+    ["server/src/crypto/README.md", "ACMENC01 byte layout drawn as a table; nonce per chunk; per-asset keys wrapped by MASTER_KEY; HLS AES-128 key flow; rotate-master-key.", "aeadFile.ts header, HANDOFF.md section 9"],
+    ["server/src/media/README.md", "Every /api/media/* URL and the access level it needs; Range requests over encrypted files; cache headers; HLS playlists and key URL.", "HANDOFF.md section 10.3, hls-packaging.md consequences"],
+    ["server/src/uploads/README.md", "tus protocol in plain words; chunk size and the host body limit; magic-byte allowlist; ffprobe; ingest writing assets + jobs; duplicate detection.", "HANDOFF.md section 8.2, ops.md troubleshooting"],
+    ["server/src/jobs/README.md", "Job and asset state machines; claim with FOR UPDATE SKIP LOCKED; retries, backoff, 50-minute deadline; the four job kinds; how to add one; nice 10 and capped threads.", "runner.ts header, HANDOFF.md section 8"],
+    ["web/README.md", "The api / data / screens / ui layering with a small diagram; route table; TanStack Query keys and invalidation; the uploader; i18next and RTL rules (logical CSS properties only); the file-kind conventions (Component.module.css, useX.ts hooks, feature-folder index.ts); skeletons and transitions.", "CLAUDE.md, DESIGN-HANDOFF.md sections 3-4"],
+    ["web/src/ui/README.md", "Darkroom Archive tokens (colour, type, spacing); component inventory with one line each; light and dark themes; the justified-grid algorithm.", "DESIGN-HANDOFF.md sections 8-9, tokens.css comments"],
+    ["mediaworker/README.md", "The CLI contract (each command, its JSON output, error codes, exit codes); setting up the venv; the image pipeline (Pillow, pillow-heif, WebP sizes).", "__main__.py docstring, setup-worker-venv.sh"],
+    ["mediaworker/mediaworker/tonemap/README.md", "HDR and HLG for someone who has never heard of them; the four curves; why LUT tables; what the validation gate checks.", "docs/decisions/tone-curves.md (the ADR stays; this is the how-to)"],
+    ["deploy/README.md", "Server folder layout; deploy.sh step by step; rollback; crontab; backups and their gap; file-count budget; troubleshooting table.", "docs/ops.md (moved whole)"],
+  ]}
+/>
+
+Every subsystem README follows the same short template, so readers always know where to look. A README longer than about 250 lines is a sign the folder holds two subsystems.
+
+<Code
+  id="readme-template"
+  filename="server/src/jobs/README.md (template)"
+  language="md"
+  code={"# Jobs\n\nOne paragraph: what this subsystem does and who calls it.\n\n## How it fits\nLink to the root diagram. One sentence on what comes in and what goes out.\n\n## Files\n| File | What it does |\n|---|---|\n| runner.ts | One cron tick: reset stale jobs, claim, run until the deadline |\n| claim.ts | Picks the next queued job without two workers taking the same one |\n\n## How it works\nState machines, byte layouts, tables, numbered sequences. Diagrams if they help.\n\n## Rules and why\nEach rule that is easy to break, with the reason in one or two sentences.\n\n## Change it safely\nWhich tests cover this folder and how to run them. Common changes (add a job kind) as steps.\n\n## Gotchas\nThings that surprised the last maintainer.\n"}
+/>
+
+## Code style
+
+The rules aim at one thing: a student reads a file top to bottom once and knows what it does. The *why* lives in the folder's README, so the code can stay short and the explanation does not drift away from it in a dozen header comments.
+
+<Table
+  id="style-rules"
+  columns={["Rule", "Detail", "Enforced by"]}
+  rows={[
+    ["Small files", "Aim for under 150 lines, never over 200. One exported idea per file, file named after it.", "ESLint max-lines (warn 150, error 200)"],
+    ["Descriptive names", "viewer, asset, job, not v, a, j. Functions are verbs (claimNextJob, sealFile). Booleans read as questions (isAdmin, hasAtLeast).", "Review; ESLint id-length min 2 with i, x, y allowed"],
+    ["Few comments", "No file-header essays. A one-line comment only for a why the code cannot show. Anything longer goes in the README.", "Review"],
+    ["Feature folders", "Routes, logic and tests for one feature sit together. Generic helpers go in server/src/http/ only when two features use them.", "Folder layout"],
+    ["Tests next to code", "foo.ts has foo.test.ts beside it. Integration tests that span features live in server/test/.", "vitest include glob"],
+    ["Plain data", "Pass rows and zod-parsed objects, not classes. No dependency-injection framework; a small ctx object (db, cfg, log) is passed in.", "Review"],
+    ["Types at the edge", "Every HTTP body and every mediaworker reply is parsed with a zod schema from shared/. Inside, trust the types.", "Route helpers"],
+    ["One kind per file", "Styles in Component.module.css, custom hooks in useX.ts, API calls in api/, query hooks in data/, pure helpers in lib/. No inline style objects.", "ESLint react/forbid-dom-props (style), review"],
+    ["Formatting", "Prettier with the repo's current width (120). No debates in review.", "npm run check"],
+    ["Every folder with a subsystem has a README", "scripts/check-readmes.mjs fails when a listed folder has no README or a README links to a missing file.", "npm run check"],
+  ]}
+/>
+
+Here is what that looks like on the most important file in the codebase. The logic is identical; the header comment moves to `server/src/access/README.md`, and single letters become words.
+
+<Diff
+  id="access-diff"
+  filename="apps/api/src/policy/canView.ts → server/src/access/accessLevel.ts"
+  language="ts"
+  mode="split"
+  before={`// The one access rule. Every media route, asset read and HLS key request asks \`access()\` and compares the
+// result with the route's minimum; anything below is 404, never 403 (members never learn core items exist).
+import type { Asset } from '@acm/core/db';
+import type { Viewer } from '@acm/core/schemas';
+
+export const LEVELS = ['none', 'status', 'download', 'full'] as const;
+export type Access = (typeof LEVELS)[number];
+
+export type AssetForAccess = Pick<Asset, 'tier' | 'status' | 'uploaderId' | 'deletedAt'>;
+
+export function access(v: Viewer | null, a: AssetForAccess, eventDeleted = false): Access {
+  if (!v || v.status !== 'active') return 'none';
+  if (a.deletedAt || eventDeleted || a.status === 'deleting') return 'none';
+  if (a.tier === 'core' && v.role !== 'core') return 'none';
+  if (a.status === 'ready') return 'full';
+  if (a.status === 'original_only') return 'download';
+  return v.isAdmin || a.uploaderId === v.id ? 'status' : 'none';
+}
+
+/** Route guard: anything below \`min\` becomes a 404. */
+export const atLeast = (have: Access, min: Access) => LEVELS.indexOf(have) >= LEVELS.indexOf(min);
+`}
+  after={`import type { Viewer } from '@acm/shared';
+import type { Asset } from '../db/schema/assets.ts';
+
+export const ACCESS_LEVELS = ['none', 'status', 'download', 'full'] as const;
+export type AccessLevel = (typeof ACCESS_LEVELS)[number];
+
+type AssetForAccess = Pick<Asset, 'tier' | 'status' | 'uploaderId' | 'deletedAt'>;
+
+export function accessLevel(viewer: Viewer, asset: AssetForAccess, eventDeleted = false): AccessLevel {
+  if (viewer.status !== 'active') return 'none';
+  if (asset.deletedAt || eventDeleted || asset.status === 'deleting') return 'none';
+  if (asset.tier === 'core' && viewer.role !== 'core') return 'none';
+  if (asset.status === 'ready') return 'full';
+  if (asset.status === 'original_only') return 'download';
+  const isOwnerOrAdmin = viewer.isAdmin || asset.uploaderId === viewer.id;
+  return isOwnerOrAdmin ? 'status' : 'none';
+}
+
+export function hasAtLeast(have: AccessLevel, needed: AccessLevel) {
+  return ACCESS_LEVELS.indexOf(have) >= ACCESS_LEVELS.indexOf(needed);
+}
+`}
+  annotations={[
+    { side: "before", lines: "1-2", label: "Moves to README", note: "The 404-never-403 reason becomes the first section of server/src/access/README.md, next to the full matrix." },
+    { side: "after", lines: "9", label: "No null viewer", note: "Signed-out visitors are always the ANONYMOUS_VIEWER object (role 'member'), so there is one code path instead of a null check plus readerOf()." },
+    { side: "after", lines: "15-16", label: "Named condition", note: "The last rule gets a name a student can read aloud." },
+  ]}
+/>
+
+The files that break the 200-line rule today, and how they split:
+
+<Table
+  id="split-table"
+  columns={["File today", "Lines", "Splits into"]}
+  rows={[
+    ["apps/web/src/screens/Upload.tsx", "497", "screens/upload/: UploadScreen, ChooseEvent, PickFiles, UploadList, ResumeBanner, DoneSummary"],
+    ["apps/api/src/routes/admin.ts", "420", "server/src/admin/: members, queue, items, storage, settings (.routes.ts each)"],
+    ["apps/web/src/screens/admin/Item.tsx", "361", "screens/admin/item/: ItemPanel, JobHistory, ToneCurvePicker, FrameCompare"],
+    ["apps/web/src/screens/admin/Members.tsx", "339", "screens/admin/members/: MembersScreen, MemberRow, AddMember, BulkImport"],
+    ["apps/web/src/screens/Lightbox.tsx", "333", "screens/lightbox/: Lightbox, useLightboxKeys, InfoPanel, ImageStage"],
+    ["apps/web/src/screens/Login.tsx", "297", "screens/login/: EmailStep, CodeStep, WelcomeStep"],
+    ["packages/core/src/db/schema.ts", "288", "server/src/db/schema/: users, auth, events, assets, jobs, settings"],
+    ["apps/web/src/screens/admin/Queue.tsx", "286", "screens/admin/queue/: QueueScreen, JobRow, QueueFilters"],
+    ["apps/web/src/screens/EventEdit.tsx", "256", "screens/event-edit/: EventForm, CoverPicker"],
+  ]}
+/>
+
+### One kind of thing per file
+
+Splitting by size is not enough on its own; a file should also hold one *kind* of thing. Today the web app has 346 inline `style={{…}}` objects across 23 files, and hooks such as `useNeighbours` (Lightbox) and `useSpeed` (Upload) are defined inside the screens that use them, so a student looking for "how the lightbox finds the next photo" has to scroll past markup and styling. The rewrite gives every kind of code its own file, named so the kind is obvious from the file list alone.
+
+<Table
+  id="file-kinds"
+  columns={["Kind", "File", "Lives", "Rule"]}
+  rows={[
+    ["Component", "InfoPanel.tsx", "In its feature folder", "Markup and event wiring only. No fetch, no style objects, no long logic."],
+    ["Component styles", "InfoPanel.module.css", "Next to the component", "CSS Modules: class names are scoped to the component, imported as `styles.panel`. Logical properties only (margin-inline, inset-inline-start) so RTL keeps working."],
+    ["Design tokens", "ui/tokens.css", "One global file", "Colours, type scale, spacing, radii, easing as CSS variables. Modules use the variables, never raw values."],
+    ["Custom hook", "useLightboxKeys.ts", "Next to the component, or web/src/hooks/ once two features use it", "One hook per file, named after the hook. Returns plain values and callbacks; testable without rendering the screen."],
+    ["Data hook", "data/events.ts", "web/src/data/", "TanStack Query hooks only (useEvents, useUpdateEvent). The only place query keys and invalidation live."],
+    ["API call", "api/events.ts", "web/src/api/", "The only place fetch is called; parses responses with the shared zod schema."],
+    ["Pure helper", "justify.ts, formatBytes.ts", "web/src/lib/", "No React, no DOM. Has a .test.ts beside it."],
+    ["Types and constants", "types.ts, constants.ts", "In the feature folder", "Only when more than one file in the folder needs them; otherwise keep them in the file that uses them."],
+    ["Barrel", "index.ts", "Feature folder root", "Re-exports the folder's public component(s) so imports stay `screens/lightbox`, not deep paths."],
+  ]}
+/>
+
+<FileTree
+  id="feature-folder"
+  title="One web feature folder, by example"
+  entries={[
+    { path: "web/src/screens/lightbox/index.ts", change: "added", note: "export { Lightbox } from './Lightbox.tsx'" },
+    { path: "web/src/screens/lightbox/Lightbox.tsx", change: "added", note: "Layout of stage + panel; wires the hooks together." },
+    { path: "web/src/screens/lightbox/Lightbox.module.css", change: "added", note: "Overlay, open/close transition, reduced-motion override." },
+    { path: "web/src/screens/lightbox/ImageStage.tsx", change: "added" },
+    { path: "web/src/screens/lightbox/ImageStage.module.css", change: "added" },
+    { path: "web/src/screens/lightbox/InfoPanel.tsx", change: "added", note: "File info, download buttons, admin actions." },
+    { path: "web/src/screens/lightbox/InfoPanel.module.css", change: "added" },
+    { path: "web/src/screens/lightbox/useNeighbours.ts", change: "added", note: "Previous/next asset ids; today an inline function in Lightbox.tsx." },
+    { path: "web/src/screens/lightbox/useLightboxKeys.ts", change: "added", note: "Esc, arrow keys, focus return." },
+    { path: "web/src/screens/lightbox/useNeighbours.test.ts", change: "added" },
+    { path: "web/src/hooks/useCountdown.ts", note: "Shared hooks used by two or more features (login resend timer, upload ETA)." },
+    { path: "web/src/hooks/useDebounced.ts", change: "added", note: "Replaces the hand-rolled setTimeout debounce in Members and SearchBox." },
+    { path: "web/src/ui/Button.tsx", note: "Shared UI components keep the same pattern: Button.tsx + Button.module.css." },
+    { path: "web/src/ui/Button.module.css", change: "added" },
+    { path: "web/src/ui/tokens.css", note: "The only global stylesheet besides a small base.css reset." },
+  ]}
+/>
+
+<Code
+  id="module-css-example"
+  filename="web/src/screens/lightbox/InfoPanel.tsx + InfoPanel.module.css"
+  language="tsx"
+  code={"import styles from './InfoPanel.module.css';\nimport { useDownloadLinks } from './useDownloadLinks.ts';\n\nexport function InfoPanel({ asset }: { asset: AssetDetail }) {\n  const links = useDownloadLinks(asset);\n  return (\n    <aside className={styles.panel}>\n      <h2 className={styles.title}>{asset.originalFilename}</h2>\n      {links.map((link) => (\n        <a key={link.href} className={styles.download} href={link.href} download>\n          {link.label}\n        </a>\n      ))}\n    </aside>\n  );\n}\n\n/* InfoPanel.module.css */\n.panel { padding-inline: var(--space-5); border-inline-start: 1px solid var(--border); }\n.title { font: var(--type-h3); }\n.download { margin-block-start: var(--space-2); }\n"}
+/>
+
+The server follows the same idea inside each feature folder: `members.routes.ts` (HTTP: parse with zod, call the service, shape the reply), `members.service.ts` (the rules, no Fastify types), `members.queries.ts` (Drizzle queries only) and `members.test.ts`. A route file that contains SQL, or a query file that knows about HTTP status codes, is the server's equivalent of an inline style.
+
+<Callout id="split-cost" tone="info">
+Vite supports CSS Modules with no extra dependency, and TypeScript gets the class names through a one-line `*.module.css` declaration in `web/src/vite-env.d.ts`. The cost is more, smaller files; the feature-folder `index.ts` and the README's file table keep them navigable.
+</Callout>
+
+## Keep, simplify, drop
+
+<Table
+  id="kss-table"
+  columns={["Area", "Decision", "Reason"]}
+  rows={[
+    ["Fastify 5, Drizzle, React 18, react-router v7, TanStack Query, i18next, Vite", "Keep", "They work on the host and are what students will meet elsewhere. Swapping them adds risk and no clarity."],
+    ["PostgreSQL job queue + cron + flock", "Keep", "No extra service to run on shared hosting. Explained once in jobs/README.md."],
+    ["access() plus its SQL twin and matrix test", "Keep", "The single most important security property. Renamed, not redesigned."],
+    ["Email OTP, decoy rows, timing floor, hashed sessions, CSRF header", "Keep", "Each closes a real attack; auth/README.md says which."],
+    ["ACMENC01, per-asset keys, HLS AES-128", "Keep", "Data on disk already uses them."],
+    ["tus resumable uploads", "Keep", "Phone uploads over campus Wi-Fi must survive a locked screen."],
+    ["Python via spawn, one JSON object on stdout", "Keep", "A clean, testable seam between the two languages."],
+    ["Four TS workspaces", "Simplify to three", "api and worker share almost everything; shared/ makes the web import rule a package boundary."],
+    ["Layer folders (routes/, lib/, policy/)", "Simplify to feature folders", "One folder per thing a student is asked to fix."],
+    ["Long file-header comments", "Move into READMEs", "Explanations in one place per subsystem; code stays short."],
+    ["Nullable viewer plus readerOf()", "Simplify", "Always pass a Viewer; signed-out is ANONYMOUS_VIEWER."],
+    ["docs/HANDOFF.md and DESIGN-HANDOFF.md", "Archive to docs/history/", "They were build requirements; the READMEs describe what exists."],
+    ["Automatic tone-curve scoring (torch + pyiqa, 53,020 files, 2.5 GB venv)", "Open question", "Ships off by default (tonemap_auto=false) and is the hardest code for students; see Open Questions."],
+    ["PRELAUNCH_ALLOWLIST", "Drop after launch", "Only limits sign-in before launch."],
+  ]}
+/>
+
+## Data model (unchanged)
+
+The schema is carried over table for table. The reorganisation is only in files: `server/src/db/schema/` holds one file per group below, and `server/src/db/README.md` explains each status column's allowed values next to the state machine that moves between them.
+
+<DataModel
+  id="data-model"
+  entities={[
+    { id: "users", name: "users", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "email", type: "text (lower, unique)" },
+      { name: "role", type: "text CHECK member|core" },
+      { name: "is_admin", type: "boolean (needs core)" },
+      { name: "status", type: "text CHECK active|disabled" },
+    ] },
+    { id: "sessions", name: "sessions", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "token_hash", type: "bytea (unique)" },
+      { name: "user_id", type: "uuid", fk: "users.id" },
+      { name: "expires_at", type: "timestamptz" },
+    ] },
+    { id: "otp_codes", name: "otp_codes", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "email", type: "text" },
+      { name: "code_hash", type: "bytea (HMAC + pepper)" },
+      { name: "attempts", type: "int" },
+    ] },
+    { id: "events", name: "events", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "slug", type: "text (unique)" },
+      { name: "starts_on", type: "date" },
+      { name: "default_tier", type: "text CHECK member|core" },
+      { name: "cover_asset_id", type: "uuid", fk: "assets.id", nullable: true },
+      { name: "deleted_at", type: "timestamptz", nullable: true },
+    ] },
+    { id: "assets", name: "assets", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "event_id", type: "uuid", fk: "events.id" },
+      { name: "kind", type: "text CHECK image|video" },
+      { name: "tier", type: "text CHECK member|core" },
+      { name: "status", type: "text CHECK (8 states)" },
+      { name: "encrypted", type: "boolean" },
+      { name: "uploader_id", type: "uuid", fk: "users.id" },
+      { name: "deleted_at", type: "timestamptz", nullable: true },
+    ] },
+    { id: "renditions", name: "renditions", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "asset_id", type: "uuid", fk: "assets.id" },
+      { name: "kind", type: "text CHECK (7 kinds)" },
+      { name: "rel_path", type: "text" },
+      { name: "encrypted", type: "boolean" },
+    ] },
+    { id: "asset_keys", name: "asset_keys", fields: [
+      { name: "asset_id", type: "uuid", pk: true, fk: "assets.id" },
+      { name: "file_key_wrapped", type: "bytea" },
+      { name: "hls_key_wrapped", type: "bytea", nullable: true },
+    ] },
+    { id: "jobs", name: "jobs", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "asset_id", type: "uuid", fk: "assets.id", nullable: true },
+      { name: "kind", type: "text CHECK process|reprocess|retier|purge" },
+      { name: "state", type: "text CHECK (5 states)" },
+      { name: "priority", type: "int" },
+      { name: "attempts / max_attempts", type: "int" },
+      { name: "run_after", type: "timestamptz" },
+    ] },
+    { id: "processing_runs", name: "processing_runs", fields: [
+      { name: "id", type: "uuid v7", pk: true },
+      { name: "asset_id", type: "uuid", fk: "assets.id" },
+      { name: "tone_curve", type: "text CHECK (4 curves)", nullable: true },
+      { name: "curve_source", type: "text CHECK", nullable: true },
+      { name: "scores", type: "jsonb", nullable: true },
+    ] },
+    { id: "audit_log", name: "audit_log", fields: [
+      { name: "id", type: "bigserial", pk: true },
+      { name: "actor_id", type: "uuid", nullable: true },
+      { name: "action", type: "text" },
+      { name: "data", type: "jsonb", nullable: true },
+    ] },
+    { id: "app_settings", name: "app_settings", fields: [
+      { name: "key", type: "text", pk: true },
+      { name: "value", type: "jsonb" },
+    ] },
+  ]}
+  relations={[
+    { from: "sessions", to: "users", kind: "n-1" },
+    { from: "assets", to: "events", kind: "n-1" },
+    { from: "assets", to: "users", kind: "n-1" },
+    { from: "renditions", to: "assets", kind: "n-1" },
+    { from: "asset_keys", to: "assets", kind: "1-1" },
+    { from: "jobs", to: "assets", kind: "n-1" },
+    { from: "processing_runs", to: "assets", kind: "n-1" },
+    { from: "events", to: "assets", kind: "n-1" },
+  ]}
+/>
+
+<Callout id="tier-naming" tone="info">
+
+The tier the UI calls **Public** is stored as `'member'`, because accounts are now core-only and signed-out visitors are the "member" audience. Renaming the stored value is not additive (old code still writes `'member'`), so the rewrite names it once, `PUBLIC_TIER = 'member'` in `shared/src/enums.ts`, and the db README explains the history. Whether to rename it later is an open question.
+
+</Callout>
+
+## Build order
+
+The rewrite happens on a long-lived branch in this repo, in seven phases. Server and web move together so every phase ends with something a person can click. A phase is finished only when its tests pass **and its READMEs are written**; writing the README last on a finished folder is what keeps it accurate.
+
+<Diagram id="phases" frame="show" caption="Phases as two lanes. Each column is one phase; it ends with green tests and its READMEs.">
+
+```html
+<div class="ph">
+  <div class="hdr"></div>
+  <div class="hdr diagram-pill">0 Foundation</div>
+  <div class="hdr diagram-pill">1 Data</div>
+  <div class="hdr diagram-pill">2 Sign-in + browse</div>
+  <div class="hdr diagram-pill">3 Media bytes</div>
+  <div class="hdr diagram-pill">4 Uploads + jobs</div>
+  <div class="hdr diagram-pill">5 Admin</div>
+  <div class="hdr diagram-pill">6 Ship</div>
+
+  <div class="lane diagram-muted">server</div>
+  <div class="diagram-box span2">skeleton, check script, docker PG 9.6, root README</div>
+  <div class="diagram-node">shared/, db/ schema + baseline migrations</div>
+  <div class="diagram-node">auth/, access/, library/</div>
+  <div class="diagram-node">crypto/, media/</div>
+  <div class="diagram-node">uploads/, jobs/, mediaworker/</div>
+  <div class="diagram-node">admin/, cron/</div>
+  <div class="diagram-box span2">deploy/, parity check, cutover</div>
+
+  <div class="lane diagram-muted">web</div>
+  <div class="diagram-card">tokens, ui/ kit</div>
+  <div class="diagram-card">shell, login, library, event</div>
+  <div class="diagram-card">lightbox, player</div>
+  <div class="diagram-card">upload, my uploads</div>
+  <div class="diagram-card">admin screens</div>
+</div>
+```
+
+```css
+.ph { display: grid; grid-template-columns: 56px repeat(7, 1fr); gap: 8px; align-items: stretch; font-size: 12px; }
+.hdr { text-align: center; }
+.lane { display: flex; align-items: center; }
+.span2 { grid-row: span 2; display: flex; align-items: center; }
+.ph > .diagram-node, .ph > .diagram-card, .ph > .diagram-box { padding: 8px; }
+@media (max-width: 720px) { .ph { grid-template-columns: 1fr; } .lane, .hdr:first-child { display: none; } .span2 { grid-row: auto; } }
+```
+
+</Diagram>
+
+<Table
+  id="phase-table"
+  columns={["Phase", "Builds", "Reuses from today", "Exit check"]}
+  rows={[
+    ["0 Foundation", "Workspaces shared/server/web; Prettier, ESLint (max-lines), npm run check, scripts/check-readmes.mjs; root README with the system diagram; README template.", "docker-compose.yml, scripts/test/global-setup.ts, tsconfig settings", "npm run check passes on the empty skeleton."],
+    ["1 Data", "shared/ enums, zod API files, status, eta; server/src/db schema split by group; config.ts; ids.ts.", "migrations 0000-0002 copied verbatim; core/test/eta, config, status-search tests", "drizzle-kit generate shows no diff against the copied migrations; ported tests green on PG 9.6."],
+    ["2 Sign-in + browse", "auth/, access/, library/ routes; web shell, login, library, event screens; i18n en.json.", "auth.test, canView.test, library.test; tokens.css, base.css, en.json", "Ported tests green; sign in with a logged OTP and browse seeded events."],
+    ["3 Media bytes", "crypto/ (ACMENC01, key wrapping), media/ (Range, HLS); lightbox and player.", "aeadFile.test, encryption.test; range.ts logic", "A core file sealed by the current release opens in the new one and the reverse."],
+    ["4 Uploads + jobs", "uploads/ (tus, sniff, probe, ingest); jobs/ runner and kinds; mediaworker/ moved; upload and my-uploads screens.", "uploads, worker, video, tonemap tests; all pytest suites", "Upload a photo and an HLG video locally; npm run once makes renditions."],
+    ["5 Admin", "admin/ routes (members, queue, items, storage, settings); cron/ cleanup and stats; admin screens.", "admin.test; members-template.xlsx", "Ported admin tests green; bulk member import works."],
+    ["6 Ship", "deploy/ folder and README; parity script; cutover on the production host.", "scripts/deploy.sh, crontab.template, health.sh, backup.sh", "Parity diff is empty; the smoke test below passes on production; rollback rehearsed."],
+  ]}
+/>
+
+<Callout id="risk-parity" tone="risk">
+
+**The main risk is a silent behaviour change** in a rule nobody wrote down, for example which statuses count toward an event's item count. The defence is to port tests before code in every phase and to run the parity script in phase 6: the current release and the new one, on the same copy of the production database, answer the same GET requests as a signed-out visitor, a core member and an admin, and the JSON must match field for field.
+
+</Callout>
+
+<Callout id="risk-deploy" tone="warning">
+
+The release tree changes shape (`server/api.cjs` instead of `api/app.cjs`), so `~/apps/acm-media/app/start.cjs` must try the new path and fall back to the old one. That lets a rollback to an old release keep working without touching the Passenger registration.
+
+</Callout>
+
+## Verification
+
+<Checklist
+  id="verify"
+  items={[
+    { id: "v-check", label: "npm run check passes: typecheck, ESLint (including max-lines 200), Prettier, Vitest on the docker PG 9.6, check-readmes", note: "Run on every phase and in CI." },
+    { id: "v-py", label: "npm run test:py passes for mediaworker" },
+    { id: "v-tests-ported", label: "Every test from apps/api/test, apps/worker/test and packages/core/test exists in the new tree", note: "A small list in the phase 6 PR maps old test names to new files." },
+    { id: "v-schema", label: "drizzle-kit generate against the new schema files produces no migration" },
+    { id: "v-parity", label: "Parity script: GET responses from the current and new release match for anonymous, core and admin viewers on a copy of production" },
+    { id: "v-crypto", label: "Core originals and HLS written by the current release decrypt and play in the new release, and the reverse" },
+    { id: "v-smoke", label: "One-event smoke on production: upload 10 photos and 1 HLG iPhone video from a phone, lock the phone mid-upload, resume, wait for processing, view as signed-out (Public only), as core (core items visible, file on disk starts with ACMENC01), and see the job in Admin, Processing queue" },
+    { id: "v-rollback", label: "deploy.sh --rollback to the last pre-rewrite release brings the site back, then roll forward again" },
+    { id: "v-reader", label: "Reader test: a chapter member who has not seen the repo uses only the READMEs to add a field to the event form and its API in under two hours", note: "Note where they got stuck and fix that README." },
+  ]}
+/>
+
+### Open Questions
+
+<QuestionForm
+  id="open-questions"
+  questions={[
+    {
+      id: "q-strategy",
+      title: "How should the rewrite reach production?",
+      mode: "single",
+      options: [
+        { id: "branch-same-data", label: "Branch in this repo, same database and media folder", detail: "Deploys as an ordinary release; rollback is a symlink flip. Needs the start.cjs fallback.", recommended: true },
+        { id: "new-repo-import", label: "New repo, fresh schema, one-time data import", detail: "Cleanest schema, but a migration script, a downtime window and no easy rollback." },
+      ],
+      required: true,
+    },
+    {
+      id: "q-tonemap",
+      title: "What happens to automatic tone-curve selection (torch + pyiqa)?",
+      subtitle: "It ships switched off, adds 53,020 files and 2.5 GB to the account, and is the hardest code for students.",
+      mode: "single",
+      options: [
+        { id: "drop-auto", label: "Drop the scorer; one fixed curve plus the admin override", detail: "Keeps the four LUT curves and the per-item override in Admin; removes torch, pyiqa and the gate.", recommended: true },
+        { id: "keep-optional", label: "Keep it as an optional extra", detail: "pip install mediaworker[scoring]; the worker skips scoring when it is not installed." },
+        { id: "keep-as-is", label: "Keep it as it is today" },
+      ],
+    },
+    {
+      id: "q-tier-name",
+      title: "Should the stored tier value 'member' be renamed to 'public'?",
+      mode: "single",
+      options: [
+        { id: "constant-only", label: "No: name it once as PUBLIC_TIER and explain it in the db README", detail: "No migration; one confusing word, documented in one place.", recommended: true },
+        { id: "two-release-rename", label: "Yes, later, as a two-release migration", detail: "Release 1 accepts both values and writes 'public'; release 2 backfills and tightens the CHECK." },
+      ],
+    },
+    {
+      id: "q-packages",
+      title: "How many TypeScript packages?",
+      mode: "single",
+      options: [
+        { id: "three", label: "Three: shared, server, web", detail: "api and worker become two entry points of server.", recommended: true },
+        { id: "four", label: "Four, as today: core, api, worker, web", detail: "Smaller diff from today; the web import rule stays a convention." },
+      ],
+    },
+    {
+      id: "q-lint",
+      title: "How strict is the 200-line limit?",
+      mode: "single",
+      options: [
+        { id: "error-200", label: "Warn at 150, fail CI at 200", recommended: true },
+        { id: "warn-only", label: "Warn only; reviewers decide" },
+      ],
+    },
+    {
+      id: "q-students",
+      title: "Which part of the current code do students find hardest today?",
+      subtitle: "The answer decides which README gets written first and gets the most diagrams.",
+      mode: "freeform",
+      placeholder: "For example: the video pipeline, encryption, the upload resume logic...",
+    },
+  ]}
+  submitLabel="Send answers"
+/>

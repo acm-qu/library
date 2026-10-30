@@ -1,0 +1,667 @@
+---
+title: "Hosting limits, processing time and the upload pipeline"
+summary: "Why the cPanel limit emails fired, how the processing ETA is computed and why it could run away, what the backend does for each kind of upload, a resource model in equations, and the ranked fixes, now implemented (28541d2, 73eecba, 36ae43b)."
+status: draft
+---
+
+# Hosting limits, processing time and the upload pipeline
+
+<Callout id="deploy-status" tone="decision">
+
+**Deploy status (30-10).** The fixes are implemented and committed: **28541d2** (steps 1–8 and 10), **73eecba** (the API starts the worker when an upload finishes, step 11) and **36ae43b** (docs for `WORKER_WAKE`). Step 9 needed no code change. The deploy is in progress / pending. On the server, `WORKER_WAKE` has been added to `shared/.env` and the new `deploy/health.sh` is installed. Still to do by hand: change the worker cron to every 2 minutes in cPanel.
+
+</Callout>
+
+**Objective.** Explain the three host emails (process limit 200 "120 times", CPU 400%, disk IO 30 MB/s), explain how the "ready by" processing time is calculated and why it can climb towards infinity, describe exactly what the backend does for each kind of upload, and model how website operations turn into processes, CPU and disk writes. The plan ends with the small, ranked changes that keep the library inside the limits (all implemented), each with a check that can be run on the server.
+
+**The finding in one paragraph.** The cPanel table shows two numbers for each limit: **A**, the average over the hour, and **F**, the number of times the limit was actually hit during that hour. The averages never get close to the limits. The emails count **faults**, and faults come from spikes that last a few seconds. Every fault on record traces back to our own setup, benchmark and deploy work: uncapped ffmpeg trial encodes on 27-10, torch/BLAS thread pools during a deploy on 29-10, and npm/pip/torch work on each deploy. None came from the other sites on the account, and none from people browsing. Disk IO is the limit that normal use gets closest to, when uploads, processing and a deploy overlap.
+
+**Done means:**
+- No NPROC or SPEED faults during a 10-file upload, a video poster step or a deploy, as shown by the F columns in cPanel Resource Usage.
+- The account's peak task count stays well under 200 while a video is processed. Before the fixes the worst case was about 120 (the poster step). With the caps the poster step is about 56, and the peak is the ladder encode at about 71.
+- The processing time shown to users stays finite and honest when the worker is stopped, throttled or retrying.
+
+Automatic tone-curve selection and the deploy policy are now decided (see **Decided** above the questions). The questions still open are in **Open Questions** at the bottom, each with a recommended default.
+
+## 1. Did we hit the host limits?
+
+### The limits
+
+The account `quhosting` runs inside a CloudLinux LVE. Every limit applies to the **whole account**, which is shared by five sites: library.qu.acm.org, csewiki, better-schedule (a Next.js server with about 10 threads), test and qu.hosting.
+
+<Table
+  id="limits"
+  columns={["Limit", "Value", "What it counts"]}
+  rows={[
+    ["SPEED (CPU)", "400%", "4 cores' worth of CPU for the whole account"],
+    ["NPROC", "200", "tasks: processes AND their threads"],
+    ["EP", "150", "entry processes, i.e. concurrent requests entering the account"],
+    ["IO", "30 MB/s", "disk read + write throughput"],
+    ["IOPS", "4096", "disk operations per second"],
+    ["PMEM", "4 GB", "physical memory"]
+  ]}
+/>
+
+<Callout id="nproc-trap" tone="risk">
+
+**The host reports 64 CPUs** (`nproc` = 64), but the account may only use 4 cores. Any tool that sizes its thread pool from the CPU count (ffmpeg filters, torch, BLAS, OpenMP) starts about 64 threads, and each thread counts against NPROC. One uncapped tool can use a third of the 200-task budget on its own. At idle (30-10, around 13:30) the whole account runs 15 processes with 45 threads, and the library API is 1 `lsnode` process with 11 threads.
+
+</Callout>
+
+### Averages vs faults: each email mapped to its hour
+
+The A columns show averages over a whole hour, so a 5-second spike to 200 tasks hardly moves them. The F column is what triggers the emails. Times are Doha (UTC+3); causes come from git, log and file timestamps.
+
+<Table
+  id="email-map"
+  columns={["Hour (Doha)", "Faults", "Cause", "Email it explains"]}
+  rows={[
+    ["27-10 12:00", "SPEED F=5, NPROC F=2, IO F=1", "Our pre-repo trial run over SSH: ffmpeg download, then uncapped ladder and tone-curve test encodes (timeline below)", "CPU 400% \"5 times\"; process limit \"2 times\""],
+    ["29-10 15:00", "SPEED F=1, IO F=1", "First-day setup", "part of IO \"14 times\""],
+    ["29-10 18:00", "IO F=9 (avg 880 KB/s)", "torch install (`~/logs/install-torch.log` 18:08) + release upload", "part of IO \"14 times\""],
+    ["29-10 21:00", "IO F=4, IOPS avg 6.6", "Tone-curve table generation and first processing", "part of IO \"14 times\""],
+    ["29-10 22:00", "NPROC F=120 (avg 70.7), CPU avg 102%, PMEM avg 1011 MB", "Deploy of 08e79d7 at 22:45 (tone-curve tables, automatic curve selection, validation gate): torch + BLAS/OpenMP started one thread per CPU (64). Fixed by 75a4deb at 22:48 (cap BLAS threads in the worker venv setup)", "process limit 200 \"120 times\""],
+    ["30-10 01:00", "SPEED F=1", "One video encode (worker log: 40 s video job at 01:11)", "—"],
+    ["30-10 11:00", "IO F=4, CPU avg 14%", "Exactly one deploy (release 661d899 at 11:38, tonemap gate loading torch at 11:42) and nothing else: 0 uploads, 0 worker jobs, 71 API requests. Other deploy attempts that hour stopped at the local test step", "—"],
+    ["30-10 12:00", "IO F=1, CPU avg 39%", "Three deploys (releases 12:10, 12:36, 12:44; gate runs 12:14, 12:40, 12:47, each loading torch). Only one file uploaded (12:27, processed in 1.3 s). 5 API process ids = one restart per deploy (pkill lsnode). No request slower than 5 s, no errors", "—"]
+  ]}
+/>
+
+The IO email's "14 times" is 1 + 9 + 4 from 29-10. There have been no NPROC faults since the 22:48 fix, and today there are no process or CPU faults at all. One deploy alone produced 4 IO faults at 11:00.
+
+### 27-10: the trial run
+
+The library repo's first commit is 29-10 13:03, but the 27-10 12:00 hour belongs to this project too. It was a trial run over SSH before the repo existed, reconstructed from `~/.bash_history` and file times (server time is EDT, Doha − 7 h).
+
+<Table
+  id="trial-run"
+  columns={["Doha time", "What ran", "Fault it caused"]}
+  rows={[
+    ["12:10", "Uploaded `IMG_4515.MOV` (33 MB HDR sample)", "—"],
+    ["12:18", "Downloaded and extracted a static ffmpeg (80 MB) into `~/bin`", "IO F=1"],
+    ["12:30–12:41", "Three ladder encodes (`A/B/C_{360,720,1080}.mp4`)", "NPROC F=2, SPEED F=5"],
+    ["12:45–12:46", "Six tone-curve clips (`T_{hable,mobius,reinhard}_{100,203}.mp4`)", "(same hour)"]
+  ]}
+/>
+
+The first encodes ran with **no `-threads` and no filter-thread caps** on a host that reports 64 CPUs, so ffmpeg sized its thread pools for 64. `nice -n 19` did not help, because nice only orders our own threads and does not raise the account quota. Later runs added `-threads 2 -filter_complex_threads 1`. In those two hours the other sites served only about 45 requests (csewiki 36, qu.hosting 9, better-schedule 2), so they were not the cause.
+
+<Callout id="conclusion" tone="decision">
+
+**Conclusion.** Every fault traces back to our own setup, benchmark and deploy work: uncapped ffmpeg trial encodes on 27-10, torch/BLAS on 29-10, and npm/pip/torch on every deploy. None came from the other sites, and none from normal browsing. **The lesson is that any tool that sizes thread pools from `nproc` (64) must be capped explicitly.** Disk IO is the limit closest to normal use, when uploads, processing and deploys overlap.
+
+</Callout>
+
+### The account-wide budget
+
+Each bar shows one limit, with what uses it stacked from left to right. The thick mark is the limit. The poster step's 64 filter threads (before 28541d2) are inferred from ffmpeg's default (one filter thread per reported CPU); they were the largest spike. Every ffmpeg call now has explicit caps, so the ladder encode is the largest remaining one.
+
+<Diagram id="budget" frame="show" caption="Account-wide resource budget. NPROC bars are scaled to 200 tasks, the CPU bar to 10 cores (limit at 4) and the IO bar to 30 MB/s.">
+
+```html
+<div class="budget">
+  <div class="row">
+    <div class="lbl"><b>NPROC, before</b><span class="diagram-muted">video poster step</span></div>
+    <div class="track" data-rough>
+      <div class="seg other" style="width:15%"></div><div class="seg api" style="width:5.5%"></div><div class="seg cron" style="width:6%"></div><div class="seg hot" style="width:33.5%">poster ffmpeg</div>
+      <div class="limit" style="left:calc(100% - 2px)"></div>
+    </div>
+    <div class="tot">≈ 120 / 200</div>
+    <div class="legend diagram-muted">other sites ≈ 30 · API 11 · cron + worker 12 · poster ffmpeg ≈ 67 (inferred)</div>
+  </div>
+  <div class="row">
+    <div class="lbl"><b>NPROC, capped</b><span class="diagram-muted">28541d2, ladder encode</span></div>
+    <div class="track" data-rough>
+      <div class="seg other" style="width:15%"></div><div class="seg api" style="width:5.5%"></div><div class="seg cron" style="width:6%"></div><div class="seg ok" style="width:9%"></div>
+      <div class="limit" style="left:calc(100% - 2px)"></div>
+    </div>
+    <div class="tot">≈ 71 / 200</div>
+    <div class="legend diagram-muted">ladder encode 1 + 1 + 1 + 3·(1 + a) ≈ 12–18; the poster step is now ≈ 3 (1 decode + 1 filter + 1 output), ≈ 56 in total</div>
+  </div>
+  <div class="row">
+    <div class="lbl"><b>NPROC, 29-10 22:45</b><span class="diagram-muted">deploy before BLAS cap</span></div>
+    <div class="track over" data-rough>
+      <div class="seg other" style="width:15%"></div><div class="seg api" style="width:5.5%"></div><div class="seg hot" style="width:79.5%">torch + BLAS + OpenMP: k × 64</div>
+      <div class="limit" style="left:calc(100% - 2px)"></div>
+    </div>
+    <div class="tot hotText">&gt; 200 (F = 120)</div>
+    <div class="legend diagram-muted">several thread pools, each sized to 64 CPUs</div>
+  </div>
+  <div class="row">
+    <div class="lbl"><b>CPU</b><span class="diagram-muted">1080p ladder encode</span></div>
+    <div class="track" data-rough>
+      <div class="seg cron" style="width:10%">dec 1</div><div class="seg api" style="width:10%">filt 1</div><div class="seg hot" style="width:30%">x264 3 × 1</div>
+      <div class="limit" style="left:40%"></div>
+    </div>
+    <div class="tot">demand ≈ 5 (was 10), limit 4</div>
+    <div class="legend diagram-muted">one thread per stage and rung since 28541d2, at nice 19 + ionice -c3, so the API's single event loop wins the 4th core</div>
+  </div>
+  <div class="row">
+    <div class="lbl"><b>IO</b><span class="diagram-muted">uploads only</span></div>
+    <div class="track" data-rough>
+      <div class="seg ok" style="width:17%">5</div><div class="seg warn" style="width:66%">fast uplink +20</div>
+      <div class="limit" style="left:calc(100% - 2px)"></div>
+    </div>
+    <div class="tot">5–25 / 30 MB/s</div>
+    <div class="legend diagram-muted">2 uploads at 20 Mb/s = 5 MB/s; at 100 Mb/s = 25 MB/s (at most one of the two is a video now). Hashing, decoding, encrypting or a deploy on top hits the cap.</div>
+  </div>
+</div>
+```
+
+```css
+.budget { display: flex; flex-direction: column; gap: 16px; }
+.row { display: grid; grid-template-columns: 150px 1fr 120px; gap: 4px 12px; align-items: center; }
+.lbl { display: flex; flex-direction: column; font-size: 13px; }
+.lbl span { font-size: 11px; }
+.track { position: relative; display: flex; height: 28px; border: 1px solid var(--wf-line); border-radius: 6px; background: var(--wf-paper); }
+.seg { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--wf-ink); overflow: hidden; white-space: nowrap; border-right: 1px solid var(--wf-line); }
+.seg.other { background: var(--wf-card); }
+.seg.api { background: var(--wf-accent-soft); }
+.seg.cron { background: var(--wf-line); }
+.seg.hot { background: var(--wf-warn); }
+.seg.warn { background: var(--wf-accent-soft); }
+.seg.ok { background: var(--wf-ok); }
+.limit { position: absolute; top: -6px; bottom: -6px; width: 3px; background: var(--wf-ink); }
+.tot { font-size: 12px; font-weight: 600; }
+.hotText { color: var(--wf-warn); }
+.legend { grid-column: 2 / 4; font-size: 11px; }
+@media (max-width: 640px) { .row { grid-template-columns: 1fr; } .legend { grid-column: 1; } }
+```
+
+</Diagram>
+
+## 2. How the processing time ("ready by") is calculated
+
+<Callout id="no-prod-infinity" tone="warning">
+
+**The "response time becomes infinity" report came from the deployed site, but the many files never reached the server.** The teammate confirmed it was production. LiteSpeed's access log shows her whole session on 30-10:
+
+- **12:23** signs in; **12:25** deletes an old event; **12:27** creates "test-event" and uploads **one photo** (1 POST → 201, 1 PATCH → 204). It is ready about a minute later: the wait for the next cron run plus 1.3 s of processing.
+- **12:31–12:32** a signed-out browser reloads the site five times; **12:41** someone signs in again (likely a second device).
+- After that, **no upload requests at all**, and no server errors in the window. In all of October only 3 files were ever uploaded.
+
+So whatever looked infinite happened in the browser, before anything was sent. Likely causes:
+
+1. **Uploader bug, fixed in 574e083.** Before a file starts, `apps/web/src/lib/uploader.ts` looks up saved resume state with `findPreviousUploads()`. That call had no error handling: if it failed (site storage blocked or full), `start()` never ran, the file sat at 0% with nothing sent, and "about N left" grew without bound. It now falls back to a fresh upload.
+2. **Picking many videos on an iPhone** [inferred]. iOS converts each selected video ("Preparing…") before the page receives the file, which can take minutes with no progress shown on the page.
+3. **Deploys at 12:36 and 12:44** restarted the API. Requests during a restart are retried and none failed, so this is not the cause, but each restart paused the site briefly.
+
+**Next:** ask her whether it was on her phone, and whether files showed in the list at 0% or the picker hung on "Preparing". Since 28541d2 the upload screen says "waiting to start" or "stalled, nothing sent for 20 s", and the app says "Waiting for the processor" when the worker heartbeat is stale, instead of showing a growing number. 574e083 also stops a request to `/api/events/` with an empty id, which showed up as 404s in the same log.
+
+</Callout>
+
+
+The API orders the queue the same way the worker claims jobs (running first, then priority descending, then oldest first) and gives each job a cost in seconds. The code is `jobCost` and `queueEtas` in `packages/core/src/eta.ts:22-32`, fed by `apps/api/src/lib/queue.ts`.
+
+```latex
+\text{cost}(j)=\begin{cases}3 & \text{image}\\ \rho_{\text{sdr}}\,d & \text{SDR video}\\ \rho_{\text{hdr}}\,d + F & \text{HDR video}\end{cases}
+```
+
+Here `d` is the video's duration in seconds, and `F` is `score_seconds`: 340 when automatic tone-curve scoring (`tonemap_auto`) is on, otherwise 60. The defaults are `\rho_{\text{sdr}} = 0.6` and `\rho_{\text{hdr}} = 1.2`. The time until job `k` finishes is the sum of the remaining costs of every job ahead of it, including itself:
+
+```latex
+E_k=\sum_{i\le k}\text{cost}(j_i)\,(1-p_i)\qquad\qquad \text{ready}_k = t_{\text{now}} + E_k
+```
+
+`p_i` is the progress of the running job and is 0 for every queued job. Since 28541d2 the sum skips jobs waiting out a retry backoff (`run_after` in the future, by the database clock); they get no ETA themselves. If the worker heartbeat `worker_tick` is older than 5 min (`STALE_TICK_MS`; 5 min because cron starts the worker every 2 min), every `readyInS` is null and the app shows "Waiting for the processor". The worker now also beats every minute during long jobs. The web app shows either "ready by" `t_{\text{now}} + E_k` (`readyAt` in `apps/web/src/i18n/format.ts:37`) or `fmtEta`, which is `\max(1, \operatorname{round}(E/60))` minutes and prints a dash for a non-finite value. Both are recomputed on every 15 s poll (was 5 s). After each encode, the worker updates `\rho` with an exponential moving average (`nextRho` in `eta.ts`; `video.ts`), and `score_seconds` is learned the same way. Both are now clamped (`RHO_RANGE`, `SCORE_RANGE`):
+
+```latex
+\rho \leftarrow \operatorname{clamp}_{[0.3,\,3]}\!\Big((1-\alpha)\,\rho + \alpha\,\frac{T_{\text{encode}}}{d}\Big),\qquad F \leftarrow \operatorname{clamp}_{[60,\,900]}\big((1-\alpha)\,F + \alpha\,T_{\text{score}}\big),\qquad \alpha = 0.2
+```
+
+`\rho` is still learned from wall time, not CPU time. Production has learned `\rho_{\text{hdr}} = 1.219`.
+
+<Diagram id="eta-queue" frame="show" caption="The ETA queue for 6 photos and 4 SDR 60 s clips uploaded together. Photos (priority 100) go ahead of every video (priority 0). The values below each card are the cumulative E_k.">
+
+```html
+<div class="q">
+  <div class="lane">
+    <div class="diagram-pill">claim order →</div>
+    <div class="cards">
+      <div class="diagram-card c photo"><b>6 photos</b><span class="diagram-muted">priority 100 · 6 × 3 s</span><span class="e">E = 18 s</span></div>
+      <div class="diagram-card c"><b>Video 1</b><span class="diagram-muted">0.6 × 60 = 36 s</span><span class="e">E = 54 s</span></div>
+      <div class="diagram-card c"><b>Video 2</b><span class="diagram-muted">36 s</span><span class="e">E = 90 s</span></div>
+      <div class="diagram-card c"><b>Video 3</b><span class="diagram-muted">36 s</span><span class="e">E = 126 s</span></div>
+      <div class="diagram-card c"><b>Video 4</b><span class="diagram-muted">36 s</span><span class="e">E = 162 s ≈ 3 min</span></div>
+    </div>
+  </div>
+  <div class="modes">
+    <div class="diagram-panel m" data-rough>
+      <div class="diagram-pill ok">Worker healthy</div>
+      <p>Jobs finish and p grows, so E_k falls as fast as t_now rises. "Ready by" stays put.</p>
+    </div>
+    <div class="diagram-panel m" data-rough>
+      <div class="diagram-pill bad">Worker stalled or throttled</div>
+      <p>E_k was frozen while t_now advanced on every poll, so "ready by" slid forward. Now: heartbeat older than 5 min → no ETA, "Waiting for the processor".</p>
+    </div>
+    <div class="diagram-panel m" data-rough>
+      <div class="diagram-pill bad">ρ learned from a throttled run</div>
+      <p>0.8 × 0.6 + 0.2 × 6.0 = 1.68. Every later video ETA is 2.8× too long. Now ρ is clamped to [0.3, 3], so one odd run is bounded.</p>
+    </div>
+  </div>
+</div>
+```
+
+```css
+.q { display: flex; flex-direction: column; gap: 16px; }
+.lane { display: flex; flex-direction: column; gap: 8px; }
+.cards { display: grid; grid-template-columns: 1.3fr repeat(4, 1fr); gap: 8px; }
+.c { display: flex; flex-direction: column; gap: 2px; padding: 10px; font-size: 13px; }
+.c span { font-size: 11px; }
+.c .e { margin-top: 6px; font-weight: 600; color: var(--wf-accent); font-size: 12px; }
+.photo { background: var(--wf-accent-soft); }
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.m { padding: 12px; font-size: 12px; }
+.m p { margin: 8px 0 0; color: var(--wf-ink); }
+.ok { background: var(--wf-ok); }
+.bad { background: var(--wf-warn); }
+@media (max-width: 720px) { .cards, .modes { grid-template-columns: 1fr; } }
+```
+
+</Diagram>
+
+### Wait before processing starts
+
+The ETA above counts from the moment the worker runs. Before 73eecba a job waited for the next cron minute first. Now the API starts the worker about a second after an upload's last PATCH (`WORKER_WAKE`, see step 11), and cron (every 2 min) only covers admin actions, retries and crashes:
+
+```latex
+T_{\text{ready}} = W_{\text{start}} + E_k,\qquad W_{\text{start}} \sim U(0,\,60)\ \text{s}\ \ (\text{mean } 30\ \text{s}) \;\longrightarrow\; \begin{cases} \approx 1\ \text{s} & \text{upload}\\ U(0,\,120)\ \text{s} & \text{admin action, retry} \end{cases}
+```
+
+If a worker is already running, the job simply waits its turn in `E_k`; if one is just exiting, `flock -w 20` waits it out.
+
+### Why it goes to "infinity"
+
+<Table
+  id="infinity"
+  columns={["Cause", "Mechanism", "Mitigation (step), status"]}
+  rows={[
+    ["Worker stalled, throttled or failing", "E_k is frozen while t_now advances, so \"ready by\" slides forward on every poll", "Done: no ETA and \"Waiting for the processor\" when worker_tick is older than 5 min; heartbeat during long jobs; health.sh mails after 10 min (7, 10)"],
+    ["Arrivals faster than one worker drains", "Utilisation u = λ·E[cost] ≥ 1, so the queue grows without bound", "Auto scoring off in production (3), thread caps (1, 2), worker starts at once on upload (11)"],
+    ["ρ learned from a throttled run", "One 6.0 run takes ρ from 0.6 to 1.68, so every later ETA is ×2.8 and stays inflated", "Done: ρ clamped to [0.3, 3], score_seconds to [60, 900]; still learned from wall time (7)"],
+    ["Timeouts and retries", "A timed-out job restarts from 0, up to 3 attempts; jobs waiting out a retry backoff still count (queue.ts ignores run_after)", "Done: backoff jobs get no ETA and add nothing to later ones (7)"],
+    ["Upload \"time left\" (browser)", "Uses a 20 s speed window. A stall between 8 MiB chunks or a 30 s retry wait gives a tiny speed and a huge time left; fmtEta(Infinity) would print \"Infinity h NaN min\" (inferred)", "Done: \"waiting to start\" / \"stalled\" states; fmtEta prints a dash for non-finite values (7)"],
+    ["Polling never stops", "An abandoned `uploading` row stays \"active\" for up to 48 h, so the chip keeps polling", "Done: `uploading` rows untouched for 1 h are not active; each chunk refreshes updatedAt (6)"]
+  ]}
+/>
+
+For a single worker, the queue is stable only while
+
+```latex
+u = \lambda \cdot \mathbb{E}[\text{cost}] \lt 1
+```
+
+where `\lambda` is the rate at which jobs arrive. Worked examples for 10 files, with photos first:
+
+<Table
+  id="eta-examples"
+  columns={["Batch", "Sum", "Total"]}
+  rows={[
+    ["6 photos + 4 SDR 60 s clips", "6·3 + 4·(0.6·60) = 18 + 144", "162 s ≈ 3 min"],
+    ["6 photos + 4 HDR 60 s clips, auto scoring on", "18 + 4·(1.2·60 + 340) = 18 + 1648", "1666 s ≈ 28 min"],
+    ["same, auto scoring off", "18 + 4·(72 + 60)", "546 s ≈ 9 min"],
+    ["same as auto on, after one throttled run sets ρ_hdr = 2.0", "18 + 4·(120 + 340)", "1858 s"]
+  ]}
+/>
+
+## 3. What happens in the backend, start to finish
+
+Every upload goes through the same five stages. The rows below are the five places where work happens, and the cells show what differs between photos and videos.
+
+<Diagram id="pipeline" frame="show" caption="Upload pipeline swimlanes. Columns are stages and rows are where the work runs. Core-tier extras are marked 'core'.">
+
+```html
+<div class="wrap"><div class="sw">
+  <div class="h"></div><div class="h">1 · Upload</div><div class="h">2 · Ingest (last PATCH)</div><div class="h">3 · Queue</div><div class="h">4 · Process</div><div class="h">5 · Publish</div>
+
+  <div class="ln diagram-pill">Browser</div>
+  <div class="diagram-card x">tus: 1 POST + ⌈S / 8 MiB⌉ PATCH; 2 files at a time, at most 1 video; chunks in order; retries 0–30 s</div>
+  <div class="diagram-card x">waits for the last PATCH to return</div>
+  <div class="diagram-card x">polls /uploads/mine every 15 s per visible tab</div>
+  <div class="diagram-card x">ProcessingChip shows "ready by"</div>
+  <div class="diagram-card x">tile appears on the next poll</div>
+
+  <div class="ln diagram-pill">API</div>
+  <div class="diagram-card x">tus FileStore writes MEDIA_ROOT/tus/&lt;id&gt;</div>
+  <div class="diagram-card x">sniff 4 KB · photo: probe reads 2 MiB · video: ffprobe (20 s) inside the request · rename to assets/&lt;shard&gt;/&lt;id&gt;/original · 1 transaction: asset queued + job (IMAGE 100, VIDEO 0) · then runs WORKER_WAKE</div>
+  <div class="diagram-card x">queue.ts: claim order → E_k</div>
+  <div class="diagram-card x muted">—</div>
+  <div class="diagram-card x">serves view / HLS through access()</div>
+
+  <div class="ln diagram-pill">Worker</div>
+  <div class="diagram-card x muted">—</div>
+  <div class="diagram-card x muted">—</div>
+  <div class="diagram-card x">started ≈ 1 s after ingest (WORKER_WAKE, flock -w 20); cron every 2 min, flock -n, as fallback · one job at a time · running → priority → oldest</div>
+  <div class="diagram-card x">status processing · sha256 of the whole original · kind pipeline</div>
+  <div class="diagram-card x">rename tmp → r&lt;rev&gt; · video: update ρ · core: encrypt original · storage walk (at most every 15 min)</div>
+
+  <div class="ln diagram-pill">Python + ffmpeg</div>
+  <div class="diagram-card x muted">—</div>
+  <div class="diagram-card x">ffprobe (video)</div>
+  <div class="diagram-card x muted">—</div>
+  <div class="diagram-card x"><b>photo</b> mediaworker images → view.webp + thumb.webp<br><b>video</b> ffprobe → [HDR auto: select] → one ffmpeg ladder → poster ffmpeg + python</div>
+  <div class="diagram-card x">core: HLS AES-128 by ffmpeg; sealAll on WebP files</div>
+
+  <div class="ln diagram-pill">Disk</div>
+  <div class="diagram-card x hot">write S</div>
+  <div class="diagram-card x">move, no copy</div>
+  <div class="diagram-card x muted">—</div>
+  <div class="diagram-card x hot">read S (hash) + read S (decode) [+ S select] · write outputs</div>
+  <div class="diagram-card x hot">core: read S + write S (.enc) · stat whole MEDIA_ROOT (≤ every 15 min)</div>
+</div></div>
+```
+
+```css
+.wrap { overflow-x: auto; }
+.sw { display: grid; grid-template-columns: 110px repeat(5, minmax(130px, 1fr)); gap: 6px; min-width: 820px; align-items: stretch; }
+.h { font-size: 12px; font-weight: 600; color: var(--wf-muted); padding: 2px 4px; }
+.ln { align-self: center; justify-self: start; font-size: 12px; }
+.x { font-size: 11px; line-height: 1.35; padding: 8px; }
+.muted { color: var(--wf-muted); text-align: center; }
+.hot { border-color: var(--wf-warn); }
+```
+
+</Diagram>
+
+### (a) SDR photo
+
+1. **Browser.** `apps/web/src/lib/uploader.ts:24-26` sends a tus POST, then 8 MiB PATCH chunks one after another. Up to 2 files upload in parallel, at most one of them a video (`toStart`), and failed chunks retry after 0, 1, 3, 5, 10, 20 and 30 s.
+2. **API.** `apps/api/src/routes/uploads.ts` writes chunks to `MEDIA_ROOT/tus/<id>`. The last PATCH waits for `ingest()`: sniff 4 KB, probe the image (reads 2 MiB), rename to `assets/<shard>/<id>/original.ext` (a move, not a copy), then one transaction marks the asset `queued` and adds a `process` job with priority 100. Every PATCH refreshes the row's `updatedAt`, so an `uploading` row untouched for an hour no longer counts as active. The API does no hashing.
+3. **Worker.** Right after ingest the API runs `WORKER_WAKE` (`apps/api/src/lib/wake.ts`: the crontab's command with `flock -w 20`, in its own process group), so `apps/worker/src/runner.ts` starts in about a second. Cron (every 2 min, `flock -n`) is the fallback. It claims the job and sets `processing`. `jobs/process.ts` computes a sha256 of the whole original the first time it runs; duplicates are flagged with `duplicate_of` but still processed.
+4. **Python.** `mediaworker images` (nice 19 under `ionice -c3`, `THREAD_ENV`, 180 s timeout) fully decodes the image with Pillow (HEIC through pillow_heif, 4 decode threads), applies EXIF rotation, converts ICC to sRGB, and writes `view.webp` (2560 px, q82) and `thumb.webp` (480 px, q75).
+5. **Publish.** Core tier: `sealAll` encrypts both WebP files. Publish renames tmp → `r<rev>`. `reconcileOriginal` reads the original and writes it to `.enc` for core tier, then deletes the plaintext. After the pass, `storageStatsIfStale` walks the whole `MEDIA_ROOT` tree, but only if the last walk is older than 15 min (`apps/worker/src/run.ts`, `stats.ts`). ETA cost: 3 s.
+
+### (b) HDR photo
+
+A still image with an nclx PQ or HLG transfer (16 or 18) is decoded, then stopped in `needs_review` with reason `hdr_still`. An admin's "Process anyway" clips it to 8-bit without tone mapping and continues as in (a). iPhone gain-map HEIC files are not PQ/HLG, so they follow path (a) directly (inferred).
+
+### (c) SDR video
+
+1. **Upload and ingest** as in (a), except that ingest runs `ffprobe -threads 1` inside the request (20 s timeout, `apps/api/src/uploads/probe.ts`) and the job's priority is 0.
+2. **Classify.** The worker runs `ffprobe -threads 1` (60 s). An unknown transfer, or 10-bit without tags, goes to `needs_review`.
+3. **Ladder.** One ffmpeg (`apps/worker/src/lib/ffmpeg.ts:124-129`) encodes every rung: 360p CRF26 1M/96k, 720p CRF23 3M/128k, 1080p CRF22 6M/128k, never upscaled. Since 28541d2 it uses one thread per stage: decoder `-threads 1`, `-filter_threads 1` and `-filter_complex_threads 1`, and libx264 veryfast `-threads 1` per rung (3 rungs, about 3 cores), and writes single-file HLS with 6 s segments. Timeout: `\max(15\,\text{min},\,4\,\text{s}\times d)`. Core tier: ffmpeg applies HLS AES-128 encryption.
+4. **Poster.** A second ffmpeg seeks to 10% with `-filter_threads 1`, input `-threads 1` and output `-threads 1` (before 28541d2 the filter threads were uncapped and defaulted to the CPU count of 64, inferred). Python then makes `poster.webp` and `thumb.webp`, which are sealed for core tier.
+5. **Publish**, then update `\rho_{\text{sdr}}`, encrypt the original for core tier, and walk storage.
+
+### (d) HDR video (HLG/PQ, e.g. iPhone)
+
+As (c), with a tone-map curve chosen first: an admin override wins. If `tonemap_auto` is off (production today: no `tonemap_auto` row), the curve is `hable203` through zscale+tonemap (no LUT). With auto on (the admin checkbox; the validation gate no longer blocks it), the worker builds the LUTs once, then runs Python `select`:
+- a keyframe scan of the **whole file** (ffmpeg `-filter_threads 1`, decoder `-threads 2`, output `-threads 1`);
+- 8 frames extracted, one ffmpeg each, with the same caps (`THREADS` in `frames.py`);
+- each frame scored on 4 curves × 2 metrics with pyiqa DISTS + TOPIQ-FR on CPU (`torch.set_num_threads(2)`), loading about 0.6 GB of weights on every run.
+
+This was measured at **5.6 min and 1.9 GB RSS per video** (`docs/decisions/tone-curves.md:32`). If it fails, the worker falls back to `hable203`. Tone mapping runs at full source resolution in float32 before the split into rungs. Timeout: `\max(15\,\text{min},\,8\,\text{s}\times d)`.
+
+### (e) 10 files at once
+
+The browser uploads 2 at a time, at most one video. Each finished file adds 1 job and wakes the worker (a running worker just picks it up). Photos (priority 100) go ahead of every queued video (priority 0), even videos that were queued first. The worker runs the jobs one at a time, possibly over several passes (each has a 50 min deadline), and then does at most one storage walk per 15 min. During the batch, each visible tab polls `/uploads/mine` every 15 s, and each poll runs about 6 SQL queries, including `activeJobs`, which scans the whole queue.
+
+## 4. Models: operations → processes, CPU, disk
+
+### 4.1 Processes (NPROC counts processes + threads)
+
+```latex
+N(t) = N_{\text{other}}(t) + L\,N_{\text{api}} + N_{\text{cron}}(t) + \sum_{j \in \text{running}(t)} N_{\text{job}}(j) + N_{\text{deploy}}(t) \le 200
+```
+
+- `N_{\text{other}}`: the other 4 sites, measured at about 20–30 at idle (better-schedule alone is about 10).
+- `N_{\text{api}} \approx 1 + 4_{\text{libuv}} + 6_{\text{V8}} \approx 11` per `lsnode` instance. `L` is the number of instances: 1 observed (step 9); the 5 process ids seen in one hour were restarts, one per deploy.
+- `N_{\text{cron}} \approx 2` (sh + flock) `+\,10` (worker node) while the worker runs, plus 10 for each overlapping cleanup or stats node. Each `WORKER_WAKE` that finds the worker busy adds about 2 (sh + flock) for up to 20 s; with 2 uploads in parallel that is at most about 4.
+
+Child processes per job:
+
+```latex
+N_{\text{image}} = 1 + 4\,h \qquad (h = 1 \text{ for HEIC decode threads})
+```
+
+```latex
+N_{\text{encode}} = 1 + T_{\text{dec}} + T_{\text{filter}} + \sum_{r=1}^{R} (T_{\text{x264}} + a) \approx 1 + 1 + 1 + 3\,(1 + a) \qquad [\text{was } 1 + 2 + 2 + R\,(2 + a)]
+```
+
+with `R \le 3` rungs and `a \approx 2\text{–}4` x264 helper threads for lookahead and similar work (inferred), which gives about 12–18 since 28541d2 (17–23 before); the worker node is counted in `N_{\text{cron}}`.
+
+```latex
+N_{\text{poster}} = 1 + T_{\text{dec}} + T_{\text{filter}} = 1 + 1 + 1 = 3 \qquad [\text{was } 1 + 2 + C,\; C = \text{nproc} = 64 \;\Rightarrow\; \approx 67,\ \text{inferred}]
+```
+
+```latex
+N_{\text{select}} = 1 + T_{\text{torch}} + T_{\text{omp}} + N_{\text{ffmpeg child}} \approx 1 + 2 + 2 + (1 + 2 + 1 + 1) \approx 10 \qquad [\text{was } 1 + 2 + 2 + (1 + C)]
+```
+
+A deploy before the BLAS cap started `N_{\text{deploy}} \approx k \cdot C` threads (several pools of 64 each), which caused the 120 faults. After the cap, BLAS uses 1 thread and OpenMP uses 2, and since 28541d2 a deploy only builds the venv and runs the gate when `py/` changed. The worst realistic case before the caps (the poster step), and after them, where the poster step drops to about 56 and the ladder encode becomes the peak:
+
+```latex
+N \approx 30 + 11 + 12 + 67 = 120 \qquad\longrightarrow\qquad N_{\text{poster}}:\ 30 + 11 + 12 + 3 \approx 56, \qquad N_{\text{encode}}:\ 30 + 11 + 12 + 18 \approx 71
+```
+
+### 4.2 CPU (SPEED limit = 4 cores = 400%)
+
+The demanded parallelism is the number of busy threads, `D(t) = \sum_i u_i(t)`. The whole account is granted `\min(D, 4)`. Nice does not raise the account quota; it only orders our own threads. Worker children now run at nice 19 under `ionice -c3` (verified on the server), and so does deploy work. A job that needs `W` CPU-seconds of work takes this long:
+
+```latex
+T_{\text{wall}} = \frac{W}{\min\!\big(D_{\text{job}},\; 4 - D_{\text{rest}}\big)}
+```
+
+A 1080p ladder encode demands `T_{\text{dec}} + T_{\text{filter}} + R\,T_{\text{x264}} = 1 + 1 + 3\cdot 1 = 5` since 28541d2 (it was `2 + 2 + 3\cdot 2 = 10`), still a little over 4, but at nice 19 the API wins whenever it needs a core. The API runs on a single Node event loop and competes for the same 4 cores, so its latency rises (M/M/1 approximation):
+
+```latex
+R_{\text{api}} \approx \frac{1}{\mu_{\text{api}} - \lambda_{\text{api}}}, \qquad \mu_{\text{api}} \propto \frac{4 - D_{\text{worker}}}{4}
+```
+
+The request rate `\lambda_{\text{api}}` comes from polling and PATCHes:
+
+```latex
+\lambda_{\text{poll}} = \frac{n_{\text{visible polls}}}{15\,\text{s}}, \qquad \lambda_{\text{patch}} = \frac{2\,v_{\uparrow}}{8\,\text{MiB}}
+```
+
+For example, 5 visible polls make 20 requests/min (60 at the old 5 s interval), and 2 parallel files at `v_{\uparrow} = 20\,\text{Mb/s} \approx 2.5\,\text{MB/s}` each add about 37 requests/min. Measured encode time is `T \approx \rho\, d` with `\rho_{\text{sdr}} = 0.6` and `\rho_{\text{hdr}} = 1.2` (production has learned 1.219), plus 340 s of scoring when auto is on. One thread per rung makes encodes slower in wall time, so `\rho` may drift up; the clamp bounds it at 3.
+
+### 4.3 Disk IO (30 MB/s for the whole account)
+
+Bytes moved for one original of size `S`, with `c = 1` for core tier and `a = 1` for auto-HDR scoring:
+
+```latex
+B_{\text{photo}} = \underbrace{S}_{\text{upload write}} + \underbrace{S}_{\text{sha256}} + \underbrace{S}_{\text{decode}} + \underbrace{O_{\text{img}}}_{\text{WebP} \,\approx\, 0.05\text{–}0.1\,S} + c\,(2S)
+```
+
+```latex
+B_{\text{video}} = S\,(3 + a + 2c) + O_{\text{hls}}, \qquad O_{\text{hls}} \le d \cdot \frac{(1 + 3 + 6)\,\text{Mb/s}}{8} = 1.25\,d \;\text{MB}
+```
+
+```latex
+t_{\text{IO}} \ge \frac{B}{30\,\text{MB/s}}
+```
+
+For example, a 1 GB core-tier HDR clip with auto scoring and `d = 120\,\text{s}` gives `B = 1\cdot(3+1+2) + 0.15 = 6.15\,\text{GB}`, so `t_{\text{IO}} \ge 205\,\text{s}` even with nothing else on the disk. Two parallel uploads at 20 Mb/s each write 5 MB/s, which is 17% of the cap. A fast uplink (2 × 100 Mb/s = 25 MB/s) nearly fills the cap by itself. A deploy (npm install, pip, reading 0.6 GB of torch weights) spends tens of seconds at the cap; the 30-10 IO faults line up with the 4 deploys that reached the server (1 at 11:00, 3 at 12:00). Since 28541d2 a deploy hashes `py/`, the venv script and the gate into `shared/.py-hash` and skips the venv, the weights and the gate when nothing changed, and runs at nice 19 under `ionice -c3`. After a pass, at most every 15 min, the storage walk makes about `3\,n_{\text{photo}} + 10\,n_{\text{video}}` stat calls (plus 8 frames per auto-HDR video). That is metadata IO: fine when the cache is warm, seconds when it is cold (inferred).
+
+### 4.4 Per-operation costs
+
+<Table
+  id="op-costs"
+  columns={["Operation", "Tasks added", "CPU demand", "Disk bytes", "ETA cost"]}
+  rows={[
+    ["One status poll (/uploads/mine)", "0 (API threads already counted)", "API event loop, ~6 SQL queries", "DB only", "—"],
+    ["One 8 MiB upload chunk", "0", "small", "write 8 MiB", "—"],
+    ["SDR photo", "1 + 4h, plus worker 10", "up to 4 decode threads (HEIC), nice 19", "3S + O_img (+2S core)", "3 s"],
+    ["SDR video ladder encode", "≈ 12–18 (was 17–23), plus worker 10", "≈ 5 demanded (was 10), 4 granted", "3S + O_hls (+2S core)", "ρ_sdr · d"],
+    ["Video poster step", "≈ 3 (was ≈ 67, inferred)", "1 decode + 1 filter thread", "one frame", "inside the video job"],
+    ["HDR video, auto scoring (off in production)", "≈ 10 during select (was 1 + 2 + 2 + (1 + C))", "torch 2 threads + capped ffmpeg", "4S + O_hls (+2S core)", "ρ_hdr · d + 340"],
+    ["HDR video, auto off", "as SDR", "as SDR + float32 tone map", "3S + O_hls (+2S core)", "ρ_hdr · d + 60"],
+    ["Deploy (before the BLAS cap)", "k × 64", "npm, pip, torch gate", "tens of seconds at 30 MB/s", "—"],
+    ["Deploy (28541d2), py/ unchanged", "npm only", "npm at nice 19", "npm install + rsync, under ionice -c3", "—"],
+    ["Upload finished (WORKER_WAKE)", "≈ 2 for up to 20 s if the worker is busy", "none", "none", "start wait ≈ 1 s"]
+  ]}
+/>
+
+## 5. Implementation steps (ranked)
+
+Each step is small and independent, ranked by how much risk it removes. Steps 1–4 deal with the faults; 5–10 deal with load and honest ETAs; step 11 was added afterwards for latency. **Status:** steps 1–8 and 10 are done in 28541d2, step 11 in 73eecba (docs in 36ae43b), and step 9 needed no code change.
+
+### Step 1: cap every ffmpeg thread pool (done, 28541d2)
+
+Every ffmpeg and ffprobe call now has explicit caps on the input and output side, plus `-filter_threads 1`: the worker's probe and poster in `apps/worker/src/jobs/video.ts`, the API's ingest probe in `apps/api/src/uploads/probe.ts` (`-threads 1`), both ffmpeg calls in `py/mediaworker/mediaworker/tonemap/frames.py` (`extract` and `proxy_scan`, through a shared `THREADS` list, plus `-threads 1` on ffprobe), and the gate's `_ff` helper in `py/mediaworker/mediaworker/tonemap/gate.py`, which wraps every call. This removes the 64-thread spikes.
+
+<Diff
+  id="poster-diff"
+  filename="apps/worker/src/jobs/video.ts"
+  language="ts"
+  mode="unified"
+  before={"    await run(ctx.cfg.FFMPEG, ['-nostdin', '-hide_banner', '-y', '-threads', '2', '-ss', String(Math.max(0, c.durationS * 0.1)), '-i', src, '-frames:v', '1', '-vf', vf.replace(/,format=yuv420p$/, ''), posterPng], { timeoutMs: 120_000 });\n"}
+  after={"    await run(ctx.cfg.FFMPEG, ['-nostdin', '-hide_banner', '-y', '-filter_threads', '1', '-threads', '1', '-ss', String(Math.max(0, c.durationS * 0.1)), '-i', src, '-frames:v', '1', '-vf', vf.replace(/,format=yuv420p$/, ''), '-threads', '1', posterPng], { timeoutMs: 120_000 });\n"}
+  annotations={[
+    {
+      side: "after",
+      lines: "1",
+      label: "Cap filter threads",
+      note: "Without -filter_threads the -vf graph gets one thread per reported CPU (64). The second -threads caps the output side. As committed in 28541d2."
+    }
+  ]}
+/>
+
+### Step 2: keep the worker under 3 of the 4 cores (done, 28541d2)
+
+The HLS encode in `apps/worker/src/lib/ffmpeg.ts` (`hlsArgs`) now uses one thread per stage: decoder `-threads 1`, `-filter_threads 1` and `-filter_complex_threads 1`, and libx264 `-threads 1` per rung (3 rungs, about 3 cores). The spawn helpers in `apps/worker/src/lib/spawn.ts` run every child at nice 19 and, when the host has it, under `ionice -c3` (the idle IO class). Both were verified working on the server. This leaves at least one core for the API's event loop.
+
+### Step 3: automatic tone-curve selection as an admin checkbox (done, 28541d2)
+
+Automatic selection is now a checkbox in **Admin › Storage** that takes effect as soon as it is ticked. The validation gate no longer blocks it: its result is shown next to the checkbox as information only ("Validation passed on the server" or "hasn't run yet"). The API falls back to off when the setting is unset, and per-video admin overrides still win. **Production has it off** (there is no `tonemap_auto` row), so HDR videos use `hable203`, saving 5.6 min, 1.9 GB of RAM and a full extra read per HDR video. Production has learned `\rho_{\text{hdr}} = 1.219`.
+
+### Step 4: stop doing heavy work on every deploy (done, 28541d2)
+
+`scripts/deploy.sh` hashes `py/`, `deploy/setup-worker-venv.sh` and the gate into `shared/.py-hash`, and runs the venv setup, the scorer weights and the tonemap gate only when that hash changed. The new hash is written only after the gate succeeds. All deploy work (npm install, venv, migrate, gate) runs at nice 19 under `ionice -c3`. `setup-worker-venv.sh` no longer uses `pip --upgrade`, and the gate now reuses a failed result too (same fingerprint), and reads torch/pyiqa versions from package metadata instead of importing torch. After changing ffmpeg by hand, remove `shared/.py-hash` or run the gate with `--force`.
+
+### Step 5: throttle the storage walk (done, 28541d2)
+
+`apps/worker/src/run.ts` now calls `storageStatsIfStale` (`apps/worker/src/stats.ts`), which walks `MEDIA_ROOT` only when the last measurement is older than 15 min. The nightly walk is unchanged.
+
+### Step 6: poll less (done, 28541d2)
+
+`refetchInterval` in `apps/web/src/data/uploads.ts`, `library.ts` and `admin.ts` (and the shell's chip) is 15 s instead of 5 s. In `apps/api/src/routes/uploads.ts`, an `uploading` row whose `updatedAt` is more than 1 h old no longer counts as active, and every chunk PATCH refreshes `updatedAt`, so live uploads stay active.
+
+### Step 7: an honest ETA (done, 28541d2)
+
+- `apps/api/src/lib/queue.ts` gives no ETA to jobs in retry backoff and leaves them out of the others' sums. When `worker_tick` is older than `STALE_TICK_MS` (now 5 min, since cron runs every 2 min), every ETA is null and the chip, My uploads and the admin queue show "Waiting for the processor". The worker beats every minute during long jobs too (`runner.ts`).
+- `packages/core/src/eta.ts` clamps the learned `\rho` to [0.3, 3] and `score_seconds` to [60, 900]. Learning from CPU time instead of wall time was not done.
+- The upload screen shows "waiting to start" before any bytes move and "stalled, nothing sent for 20 s" instead of a huge time left, and `fmtEta` prints a dash for a non-finite value.
+
+### Step 8: gentler uploads (done, 28541d2)
+
+`toStart` in `apps/web/src/lib/uploader.ts` keeps `PARALLEL = 2` but starts at most one video at a time. The optional client-side rate cap was not added.
+
+### Step 9: one API instance (no code change)
+
+`ps` shows 1 `lsnode` instance. The 5 process ids in one hour are restarts (deploys `pkill lsnode`), not parallel instances, so nothing needed pinning.
+
+### Step 10: monitoring (done, 28541d2)
+
+The spawn helpers sample each child's thread count (its whole process group for Python), and `apps/worker/src/runner.ts` logs `peakThreads` in each "job done" line. `deploy/health.sh` mails once when the worker has not checked in for 10 minutes, and once more when it is back. Per-job CPU time is not logged.
+
+### Step 11: start the worker when an upload finishes (done, 73eecba)
+
+After ingest queues the job, the API calls `wakeWorker` (`apps/api/src/lib/wake.ts`), which runs `WORKER_WAKE` in its own process group, so an API restart never stops an encode. `WORKER_WAKE` (in `shared/.env`, optional in `packages/core/src/config.ts`) is the crontab's worker command with `flock -w 20` instead of `-n`: a running worker picks the job up, and one that is exiting is waited out. Processing now starts about a second after an upload instead of up to a minute later. Cron moves to every 2 minutes (changed by hand in cPanel; `deploy/crontab.template` and `docs/ops.md` updated) and still covers admin actions, retries, crashes and the 50-min deadline. Unset, the library falls back to cron only.
+
+<FileTree
+  id="files"
+  title="Files touched"
+  entries={[
+    { path: "apps/worker/src/jobs/video.ts", change: "modified", note: "Step 1: ffprobe -threads 1; poster -filter_threads 1, -threads 1 in and out. Step 3: auto selection no longer needs the gate" },
+    { path: "apps/api/src/uploads/probe.ts", change: "modified", note: "Step 1: ffprobe -threads 1 at ingest" },
+    { path: "py/mediaworker/mediaworker/tonemap/frames.py", change: "modified", note: "Step 1: THREADS caps on extract and proxy_scan, ffprobe -threads 1" },
+    { path: "py/mediaworker/mediaworker/tonemap/gate.py", change: "modified", note: "Step 1: caps in _ff. Step 4: reuse failed results, versions from metadata" },
+    { path: "apps/worker/src/lib/ffmpeg.ts", change: "modified", note: "Step 2: one thread for decoder, filters and each x264 rung" },
+    { path: "apps/worker/src/lib/spawn.ts", change: "modified", note: "Step 2: nice 19 + ionice -c3. Step 10: peak thread sampling" },
+    { path: "apps/api/src/routes/admin.ts", change: "modified", note: "Step 3: tonemapAuto no longer requires the gate" },
+    { path: "apps/web/src/screens/admin/Storage.tsx", change: "modified", note: "Step 3: checkbox, gate result as information" },
+    { path: "scripts/deploy.sh", change: "modified", note: "Step 4: shared/.py-hash, low priority, gate only when py/ changes" },
+    { path: "deploy/setup-worker-venv.sh", change: "modified", note: "Step 4: no pip --upgrade" },
+    { path: "apps/worker/src/run.ts", change: "modified", note: "Step 5: storageStatsIfStale" },
+    { path: "apps/worker/src/stats.ts", change: "modified", note: "Step 5: walk at most every 15 min" },
+    { path: "apps/web/src/data/uploads.ts", change: "modified", note: "Step 6: 15 s polling" },
+    { path: "apps/web/src/data/library.ts", change: "modified", note: "Step 6: 15 s polling" },
+    { path: "apps/web/src/data/admin.ts", change: "modified", note: "Step 6: 15 s polling" },
+    { path: "apps/api/src/routes/uploads.ts", change: "modified", note: "Step 6: stale uploading rows not active, PATCH refreshes updatedAt. Step 11: wakeWorker after ingest" },
+    { path: "apps/api/src/lib/queue.ts", change: "modified", note: "Step 7: backoff jobs excluded, null ETAs on a stale heartbeat (5 min)" },
+    { path: "packages/core/src/eta.ts", change: "modified", note: "Step 7: RHO_RANGE and SCORE_RANGE clamps" },
+    { path: "apps/web/src/lib/eta.ts", change: "modified", note: "Step 7: fmtEta safe for non-finite values" },
+    { path: "apps/web/src/screens/Upload.tsx", change: "modified", note: "Step 7: waiting / stalled states" },
+    { path: "apps/web/src/lib/uploader.ts", change: "modified", note: "Step 8: at most one video uploading" },
+    { path: "apps/worker/src/runner.ts", change: "modified", note: "Step 7: heartbeat during jobs. Step 10: peakThreads in the job log" },
+    { path: "deploy/health.sh", change: "modified", note: "Step 10: mail when the worker is silent over 10 min" },
+    { path: "apps/api/src/lib/wake.ts", change: "added", note: "Step 11: run WORKER_WAKE in its own process group" },
+    { path: "packages/core/src/config.ts", change: "modified", note: "Step 11: optional WORKER_WAKE" },
+    { path: "deploy/crontab.template", change: "modified", note: "Step 11: worker every 2 minutes" },
+    { path: "docs/ops.md", change: "modified", note: "Step 11: WORKER_WAKE and the 2-minute cron" }
+  ]}
+/>
+
+<Callout id="risks" tone="risk">
+
+**Risks.** One thread per stage (step 2) makes encodes slower in wall time, so `\rho` rises; the clamp in step 7 bounds it, but `\rho` is still learned from wall time, not CPU time. Auto scoring is off in production (step 3), so HDR videos use one fixed curve; admins can tick the checkbox or override per video. Polling every 15 s makes a finished tile appear up to 10 s later. If `WORKER_WAKE` is missing or wrong (step 11), uploads wait for cron again, up to 2 min; a stale heartbeat now shows "Waiting for the processor" only after 5 min.
+
+</Callout>
+
+## 6. Verification
+
+<Checklist
+  id="verify"
+  items={[
+    { id: "v-poster", label: "During a video's \"Making poster\" step, run `ps -u quhosting -L | wc -l` on the server", note: "Expect about 56 for the whole account (about 120 before step 1), and about 71 or fewer during the ladder encode; the worker log's peakThreads for the job should be small." },
+    { id: "v-10file", label: "Upload 10 files (6 photos, 4 videos) and watch cPanel Resource Usage", note: "SPEED, NPROC and IO F columns stay 0 for that hour." },
+    { id: "v-deploy", label: "Run `scripts/deploy.sh` with no py/ change", note: "shared/.py-hash matches, so the venv, scorer weights and tonemap gate are skipped; IO F stays 0." },
+    { id: "v-nice", label: "During an encode, check `ps -o ni` and `ionice -p` on the worker's children", note: "nice 19 and the idle IO class. Already verified on the server." },
+    { id: "v-wake", label: "Upload one photo after setting WORKER_WAKE and the 2-minute cron", note: "The worker log shows the job within a few seconds of the last PATCH, not at the next cron run." },
+    { id: "v-eta-stopped", label: "Stop the worker cron, unset WORKER_WAKE and queue a video", note: "The chip shows \"Waiting for the processor\" after 5 min; \"ready by\" never slides and nothing prints Infinity or NaN. health.sh mails after 10 min." },
+    { id: "v-rho", label: "Feed `nextRho` a 6.0 s/s run in a unit test", note: "ρ stays within [0.3, 3]; covered by packages/core/test/eta.test.ts." },
+    { id: "v-backoff", label: "Make a job fail once (run_after in the future)", note: "It is not counted in E_k for later jobs." },
+    { id: "v-api", label: "Load the library in a browser while a 1080p ladder encodes", note: "Pages respond normally; the worker log shows peakThreads per job (CPU time is not logged)." },
+    { id: "v-tests", label: "`npm test`, `npm run test:py` and `npm run typecheck` pass" }
+  ]}
+/>
+
+### Decided
+
+<Callout id="decided" tone="decision">
+
+- **Automatic tone-curve selection:** an admin checkbox in Admin › Storage, **off by default** (and off in production). It works as soon as it is ticked; the validation gate is information only. Formerly an open question.
+- **Deploy policy:** the venv, scorer weights and tone-curve gate run only when `py/` (or the venv script or gate) changes, tracked by `shared/.py-hash`, and all deploy work runs at nice 19 under `ionice -c3`. Not deploying while uploads are running stays a habit, not a check in the script. Formerly an open question.
+
+</Callout>
+
+### Open Questions
+
+<QuestionForm
+  id="open-questions"
+  questions={[
+    {
+      id: "q-queue",
+      title: "Fair queue between photos and videos",
+      mode: "single",
+      options: [
+        { id: "photos-first", label: "Keep photos first", detail: "Priority 100 always goes ahead of videos." },
+        { id: "interleave", label: "Interleave: start a video after every N photos", detail: "Recommended N = 20, so a large photo batch cannot hold back videos indefinitely.", recommended: true }
+      ]
+    },
+    {
+      id: "q-site",
+      title: "Where exactly did the upload stall for the teammate?",
+      subtitle: "Production logs show her one photo arrived and nothing after it, with no server errors.",
+      mode: "single",
+      options: [
+        { id: "site-ask", label: "Ask her", detail: "Phone or laptop; did files show in the list at 0%, or did the picker hang on Preparing?", recommended: true },
+        { id: "site-phone", label: "Phone picker", detail: "iOS converting videos before the page gets them; show a hint to pick fewer videos at once or use a laptop." },
+        { id: "site-zero", label: "Files at 0%", detail: "Matches the findPreviousUploads bug fixed in 574e083; retest after the next deploy." }
+      ]
+    },
+    {
+      id: "q-ssh",
+      title: "Server experiments over SSH",
+      subtitle: "The 27-10 faults came from uncapped trial encodes.",
+      mode: "single",
+      options: [
+        { id: "safe-wrapper", label: "A ~/bin/safe wrapper that sets the caps", detail: "Always run with -threads / filter-thread caps and OMP/BLAS env caps, and outside upload sessions.", recommended: true },
+        { id: "by-hand", label: "Remember the caps by hand", detail: "No new tooling, but relies on memory." }
+      ]
+    }
+  ]}
+  submitLabel="Send answers"
+/>
