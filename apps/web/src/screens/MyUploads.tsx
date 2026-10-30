@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import type { Bucket } from '../api/uploads.ts';
 import { useMe } from '../data/session.ts';
-import { useMyUploads, useRefreshOnUploadChange, useRetry } from '../data/uploads.ts';
+import { useMyUploads, useRefreshOnUploadChange, useRetry, useUploadProgress } from '../data/uploads.ts';
 import { fmtBytes, fmtDate, fmtDuration, fmtTime, readyAt } from '../i18n/format.ts';
 import { useUploads } from '../lib/uploader.ts';
 import { Icon, type IconName } from '../ui/Icon.tsx';
@@ -25,6 +25,7 @@ export function MyUploadsScreen() {
   const q = useMyUploads(bucket, true, true);
   const items = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data]);
   const counts = q.data?.pages[0]?.counts;
+  const progressNow = useUploadProgress(items.some((i) => i.status === 'uploading' || i.status === 'queued' || i.status === 'processing'));
   useEffect(() => {
     document.title = `${t('myUploads.title')} · ${t('brand')}`;
   }, [t]);
@@ -111,7 +112,7 @@ export function MyUploadsScreen() {
             </div>
             <ul className="filelist panel" style={{ padding: 0 }}>
               {collapse(g.rows).map((r) => (
-                <Row key={r.item.assetId} r={r} isAdmin={me.isAdmin} female={me.isFemale === true} />
+                <Row key={r.item.assetId} r={r} isAdmin={me.isAdmin} female={me.isFemale === true} live={progressNow.get(r.item.assetId)} />
               ))}
             </ul>
           </section>
@@ -139,7 +140,7 @@ function collapse(rows: MyUploadItem[]) {
   return out;
 }
 
-function Row({ r, isAdmin, female }: { r: { item: MyUploadItem; more: number; bytes: number }; isAdmin: boolean; female: boolean }) {
+function Row({ r, isAdmin, female, live }: { r: { item: MyUploadItem; more: number; bytes: number }; isAdmin: boolean; female: boolean; live?: { progress: number | null } }) {
   const { t } = useTranslation();
   const retry = useRetry();
   const i = r.item;
@@ -167,7 +168,7 @@ function Row({ r, isAdmin, female }: { r: { item: MyUploadItem; more: number; by
   // Uploading in this browser: bytes sent so far. Processing: the job's progress. Otherwise a moving "busy" bar.
   const local = useUploads().find((u) => u.status === 'uploading' && u.file.name === i.filename && u.total === i.bytes);
   const busy = i.status === 'uploading' || i.status === 'processing';
-  const pct = i.status === 'processing' ? i.progress : local?.total ? local.sent / local.total : null;
+  const pct = i.status === 'processing' ? (live?.progress ?? i.progress) : local?.total ? local.sent / local.total : null;
   const err = i.status === 'failed' || i.status === 'needs_review' ? t(`uploadErrors.${(i.error ?? 'generic') as 'generic'}`, { defaultValue: t('uploadErrors.generic') }) : null;
 
   return (

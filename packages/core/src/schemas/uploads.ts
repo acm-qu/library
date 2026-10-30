@@ -77,3 +77,9 @@ export const UploadQueueRow = z.object({
 export const UploadQueue = z.object({ slots: z.number().int(), inUse: z.number().int(), rateBps: z.number(), items: z.array(UploadQueueRow) });
 export type UploadQueue = z.infer<typeof UploadQueue>;
 export type UploadQueueRow = z.infer<typeof UploadQueueRow>;
+
+/** The 1-second poll on My uploads: only the caller's unfinished items, with their status and job progress. */
+export const UploadProgress = z.object({
+  items: z.array(z.object({ assetId: Id, status: z.enum(ASSET_STATUSES), step: z.string().nullable(), progress: z.number().nullable() })),
+});
+export type UploadProgress = z.infer<typeof UploadProgress>;

@@ -358,3 +358,27 @@ describe.runIf(hasFfmpeg)('upload queue and finished uploads', () => {
     expect(rows.find((r) => r.id === tks[4]!.id)?.status).toBe('waiting');
   });
 });
+
+describe('upload progress', () => {
+  it("returns only the caller's unfinished uploads, with the running job's step and progress", async () => {
+    const mk = async (o: Partial<typeof assets.$inferInsert>) => {
+      const id = newId();
+      await db.insert(assets).values({ id, eventId, kind: 'video', tier: 'member', status: 'processing', originalFilename: 'v.mov', originalExt: 'mov', uploaderId: core.id, ...o });
+      return id;
+    };
+    const busy = await mk({});
+    await db.insert(jobs).values({ id: newId(), assetId: busy, kind: 'process', state: 'running', step: 'Encoding 720p', progress: 0.4 });
+    const queued = await mk({ status: 'queued' });
+    await mk({ status: 'ready' });
+    const someoneElse = await addUser('x@qu.edu.qa', { role: 'core' });
+    await mk({ uploaderId: someoneElse.id });
+
+    const res = await t.app.inject({ method: 'GET', url: '/api/uploads/progress', cookies: { sid: core.sid } });
+    expect(res.statusCode).toBe(200);
+    const items = res.json().items as { assetId: string }[];
+    expect(items.map((i) => i.assetId).sort()).toEqual([busy, queued].sort());
+    expect(items.find((i) => i.assetId === busy)).toMatchObject({ status: 'processing', step: 'Encoding 720p', progress: 0.4 });
+    expect(items.find((i) => i.assetId === queued)).toMatchObject({ status: 'queued', progress: null });
+    expect((await t.app.inject({ method: 'GET', url: '/api/uploads/progress', cookies: { sid: member } })).statusCode).toBe(404);
+  });
+});

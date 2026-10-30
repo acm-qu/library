@@ -1,12 +1,12 @@
 import { isUnfinished } from '@acm/core/status';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as api from '../api/uploads.ts';
 import { type Item, uploader, useUploads } from '../lib/uploader.ts';
 
 /**
- * Polls while something is uploading or processing (its progress bar moves): every 1 s on the My uploads page
- * (`live`), 4 s elsewhere (the top bar's chip, on every page); 15 s while anything else is unfinished.
+ * Polls every 4 s while something is uploading or processing (the top bar's chip, on every page), 15 s while anything
+ * else is unfinished. With `live` (My uploads) the bars move from useUploadProgress instead, so the list stays at 15 s.
  */
 export function useMyUploads(bucket: api.Bucket, enabled = true, live = false) {
   return useInfiniteQuery({
@@ -18,10 +18,24 @@ export function useMyUploads(bucket: api.Bucket, enabled = true, live = false) {
     refetchInterval: (query) => {
       const pages = query.state.data?.pages ?? [];
       const items = pages.flatMap((p) => p.items);
-      if (items.some((i) => i.status === 'uploading' || i.status === 'processing')) return live ? 1_000 : 4_000;
+      if (!live && items.some((i) => i.status === 'uploading' || i.status === 'processing')) return 4_000;
       return pages[0] && (pages[0].counts.active > 0 || items.some((i) => isUnfinished(i.status))) ? 15_000 : false;
     },
   });
+}
+
+/**
+ * Every second while `enabled`: the status and progress of the caller's unfinished uploads (one small query). When
+ * any status differs from the last answer, the full My uploads list is re-fetched.
+ */
+export function useUploadProgress(enabled: boolean) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['uploads', 'progress'], queryFn: api.getUploadProgress, enabled, refetchInterval: enabled ? 1_000 : false });
+  const statuses = (q.data?.items ?? []).map((i) => `${i.assetId}:${i.status}`).join('|');
+  useEffect(() => {
+    if (q.data) void qc.invalidateQueries({ queryKey: ['uploads', 'mine'] });
+  }, [statuses]); // eslint-disable-line react-hooks/exhaustive-deps -- only a status change should refresh the list
+  return useMemo(() => new Map((q.data?.items ?? []).map((i) => [i.assetId, i])), [q.data]);
 }
 
 /** Refreshes My uploads as soon as one of this browser's uploads starts, finishes or fails, instead of at the next poll. */

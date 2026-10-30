@@ -317,7 +317,7 @@ Every upload goes through the same five stages. The rows below are the five plac
   <div class="ln diagram-pill">Browser</div>
   <div class="diagram-card x">tus: 1 POST + ⌈S / 8 MiB⌉ PATCH; 2 files at a time, at most 1 video; chunks in order; retries 0–30 s</div>
   <div class="diagram-card x">waits for the last PATCH to return</div>
-  <div class="diagram-card x">polls /uploads/mine while something is uploading or processing (1 s on My uploads, 4 s for the top-bar chip), else 15 s, per visible tab</div>
+  <div class="diagram-card x">polls /uploads/progress (one small query) every 1 s on My uploads and the full /uploads/mine only when a status changes or every 15 s; the top-bar chip polls /uploads/mine every 4 s while something is in progress</div>
   <div class="diagram-card x">ProcessingChip shows "ready by"</div>
   <div class="diagram-card x">tile appears on the next poll</div>
 
@@ -578,7 +578,7 @@ After ingest queues the job, the API calls `wakeWorker` (`apps/api/src/lib/wake.
     { path: "deploy/setup-worker-venv.sh", change: "modified", note: "Step 4: no pip --upgrade" },
     { path: "apps/worker/src/run.ts", change: "modified", note: "Step 5: storageStatsIfStale" },
     { path: "apps/worker/src/stats.ts", change: "modified", note: "Step 5: walk at most every 15 min" },
-    { path: "apps/web/src/data/uploads.ts", change: "modified", note: "Step 6: 15 s polling; while an item is uploading or processing 1 s on My uploads and 4 s for the top-bar chip, plus a refresh when this browser's uploads change state" },
+    { path: "apps/web/src/data/uploads.ts", change: "modified", note: "Step 6: 15 s polling; on My uploads a 1 s poll of /uploads/progress (one query) re-fetches the list only when a status changes; the top-bar chip polls every 4 s while something is in progress; plus a refresh when this browser's uploads change state" },
     { path: "apps/web/src/data/library.ts", change: "modified", note: "Step 6: 15 s polling" },
     { path: "apps/web/src/data/admin.ts", change: "modified", note: "Step 6: 15 s polling" },
     { path: "apps/api/src/routes/uploads.ts", change: "modified", note: "Step 6: stale uploading rows not active, PATCH refreshes updatedAt. Step 11: wakeWorker after ingest" },

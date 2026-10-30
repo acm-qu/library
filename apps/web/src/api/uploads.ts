@@ -1,4 +1,4 @@
-import { CreateEventBody, EventDetail, ExistingFiles, MyUploadsPage, UPLOAD_BUCKETS, UploadQueue, UploadTicket, type UploadTicketBody } from '@acm/core/schemas';
+import { CreateEventBody, EventDetail, ExistingFiles, MyUploadsPage, UPLOAD_BUCKETS, UploadProgress, UploadQueue, UploadTicket, type UploadTicketBody } from '@acm/core/schemas';
 import type { z } from 'zod';
 import { call, q } from './client.ts';
 
@@ -13,3 +13,6 @@ export const createEvent = (body: z.input<typeof CreateEventBody>) => call(Event
 /** Discard a server-side unfinished upload (tus termination); its "uploading" row goes with it. */
 export const discardUpload = (uploadId: string) =>
   fetch(`/api/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE', headers: { 'X-Requested-With': 'acm-media', 'Tus-Resumable': '1.0.0' } });
+
+/** Status and job progress of the caller's unfinished uploads only (one small query; polled every second on My uploads). */
+export const getUploadProgress = () => call(UploadProgress, '/uploads/progress');

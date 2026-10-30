@@ -171,6 +171,19 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
   // An upload whose browser went away (tab closed, offline) stays 'uploading' until cleanup; after an hour it isn't active.
   const abandoned = sql`(${assets.status} = 'uploading' and ${assets.updatedAt} < now() - interval '1 hour')`;
 
+  // One query: the caller's unfinished uploads with their running job's step and progress. The full list (with ETAs)
+  // is only re-fetched when one of these changes status.
+  app.get('/api/uploads/progress', { preHandler: requireCore }, async (req) => {
+    const v = viewerOf(req);
+    const rows = await db
+      .select({ assetId: assets.id, status: assets.status, step: jobs.step, progress: jobs.progress })
+      .from(assets)
+      .leftJoin(jobs, and(eq(jobs.assetId, assets.id), eq(jobs.state, 'running')))
+      .where(and(eq(assets.uploaderId, v.id), isNull(assets.deletedAt), inArray(assets.status, ['uploading', 'queued', 'processing']), sql`not ${abandoned}`))
+      .limit(200);
+    return { items: rows };
+  });
+
   app.get('/api/uploads/mine', { preHandler: requireCore }, async (req) => {
     const v = viewerOf(req);
     const qry = MyUploadsQuery.parse(req.query);
