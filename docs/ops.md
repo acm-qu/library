@@ -22,8 +22,9 @@ something goes wrong. Security details are in `docs/security.md`.
 `shared/.env` holds `NODE_ENV=production`, `PUBLIC_ORIGIN=https://library.qu.acm.org`, `DATABASE_URL`, `MASTER_KEY`,
 `OTP_PEPPER`, `MAIL_TRANSPORT=smtp` with the `SMTP_*` values, `MEDIA_ROOT=/home/quhosting/media`,
 `KEYS_DIR=/home/quhosting/keys`, `FFMPEG`/`FFPROBE=/home/quhosting/bin/…`, `PYTHON=/home/quhosting/venvs/worker/bin/python`,
-`LUTS_DIR`, `LOG_FILE=/home/quhosting/logs/acm-api.log` (lsnode drops the API's stdout), `WORKER_WAKE` (the crontab's worker command with `flock -w 20` instead of `-n`; see Cron), and `PRELAUNCH_ALLOWLIST` until
-launch (it only limits who can sign in; member-tier items are public either way).
+`LUTS_DIR`, `LOG_FILE=/home/quhosting/logs/acm-api.log` (lsnode drops the API's stdout), `WORKER_WAKE` (the crontab's worker command with `flock -w 20` instead of `-n`; see Cron), `SUPERADMINS=tech@qu.acm.org`
+(the only account that can grant or remove admin), and an empty `PRELAUNCH_ALLOWLIST` (new people get in through
+**Request access** on the login page, which an admin approves in Admin › Members › Requests).
 
 ## Deploy
 

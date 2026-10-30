@@ -1,9 +1,11 @@
 # QU ACM Media Library
 
 Photo and video library for the QU ACM student chapter: member-tier items are public (no sign-in), core-tier
-items and uploads need a core-team session. Every account is `core` (admin is a flag on top); the `member`
-role is only the signed-out viewer and old rows. Source requirements: `docs/HANDOFF.md` (backend)
-and `docs/DESIGN-HANDOFF.md` (the Darkroom Archive design). The build plan with all system diagrams is
+items and uploads need a core-team session. Every account is `core` (admin is a flag on top; only the
+`SUPERADMINS` email can grant or remove admin); the `member` role is only the signed-out viewer and old rows. New
+people request access and an admin approves them. Gender is `users.is_female` (the old `gender` text column is
+still written for one release, then dropped). Girls-only items are visible only to female core members and admins.
+Source requirements: `docs/HANDOFF.md` (backend) and `docs/DESIGN-HANDOFF.md` (the Darkroom Archive design). The build plan with all system diagrams is
 `plans/acm-media-library/plan.mdx` (open it with `plans/run-plan.sh`).
 
 ## Layout
@@ -38,7 +40,13 @@ Copy `.env.example` to `.env.local` for development (`MAIL_TRANSPORT=log` prints
 - **Migrations are additive only**, so the previous release still runs if a deploy is rolled back.
 - **404, never 403**, for anything a viewer may not see. Signed-out visitors read as `ANON` (member tier) via
   `readerOf()` in `apps/api/src/auth/plugin.ts`. All media access goes through `access()` in
-  `apps/api/src/policy/canView.ts`.
+  `apps/api/src/policy/canView.ts` and its SQL twin `visibleSql.ts` (tier, status and girls-only).
+- **Stay inside the shared host's limits** (4 cores, 200 tasks, 30 MB/s IO, 150 entry processes, shared with 4
+  other sites; `nproc` says 64). Every new heavy step needs explicit thread caps, a CPU pin (`taskset`, see
+  `apps/worker/src/lib/spawn.ts`) and an IO pace (`pace.ts`, ffmpeg `-readrate`, `apps/api/src/media/throttle.ts`).
+  The per-step budget is in `plans/hosting-limits/plan.mdx`; keep the worst case at about 70% of each limit.
+- **Keep the plans current:** a change that alters behaviour also updates `plans/*/plan.mdx` (valid MDX: no raw
+  `{…}` in prose; LaTeX goes in latex code blocks).
 - **Pages never call fetch.** `apps/web/src/api/` → `data/` hooks → `screens/` and `ui/`.
 - **All UI strings go through i18next** (English only for now; layouts must stay RTL-safe).
 - **Never log secrets:** OTP codes, cookies, emails on auth routes, key material, `MASTER_KEY`.

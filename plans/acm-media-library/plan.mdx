@@ -14,7 +14,7 @@ status: draft
 - Every screen group in the design runs against the real API, on phone and desktop, in light and dark themes. The Arabic boards follow the Arabic decision in Decisions taken.
 - A real event flows through the system: upload 80 photos and 3 videos from a phone, close the tab, resume, wait for processing, then watch signed out. HLG iPhone footage is tone-mapped to SDR.
 - Core-tier files are encrypted on disk and still stream and download with HTTP Range.
-- The app is live on the production subdomain, with a cron-driven worker, nightly backups and docs (`docs/HANDOFF.md`, `docs/ops.md`, `docs/security.md`, `CLAUDE.md`).
+- The app is live on the production subdomain, with a cron-driven worker (every 2 minutes, plus a wake-up after each upload), nightly backups (verified 30-10: backup.sh reads only DATABASE_URL) and docs (`docs/HANDOFF.md`, `docs/ops.md`, `docs/security.md`, `CLAUDE.md`).
 - All Vitest and pytest suites pass, plus a scripted smoke test against production.
 
 The decisions taken are listed at the bottom. The two questions that were open (OTP sender and build location) are now settled, and **Open Questions** records the answers.
@@ -1107,7 +1107,7 @@ The canvas's `project/app.css` already defines every token and the base componen
     ["Player", "/p/:assetId", "Lightbox (video) + Player over its event", "useAsset; hls.js → /media/:id/hls/*", "Space F M keys; Auto shows the current level; only existing rungs"],
     ["Upload · PhoneUpload", "/upload", "UploadScreen (ChooseEvent, AddFiles, Progress, Done)", "useCreateEvent; Uppy tus → /uploads", "Resume banner; offline auto-resume; duplicate flag; HDR-off tip"],
     ["MyUploads · PhoneMyUploads", "/uploads", "MyUploadsScreen", "useMyUploads (polling) → /uploads/mine", "Grouped by event; plain-language errors; Retry"],
-    ["AdminQueue", "/admin/queue", "QueueScreen", "useJobs(state) → /admin/jobs", "Health summary; Move to the top; Needs review actions; purge jobs and deleted items hidden"],
+    ["AdminQueue (Processing)", "/admin/queue", "QueueScreen", "useJobs(state) → /admin/jobs; useCompute → /admin/compute", "Health summary; live threads/CPU/disk against the host limits; Move to the top; Needs review actions; purge jobs and deleted items hidden. The admin side nav groups Members and Events under Admin, Processing and Storage under Compute"],
     ["AdminItem", "/admin/items/:assetId", "ItemDetailsScreen", "useProcessing → /admin/assets/:id/processing, /frames/:n", "Scores table, 8 frames on a timeline, override + re-process with ETA confirm"],
     ["AdminMembers", "/admin/members", "MembersScreen (Members · Requests tabs)", "useUsers, useBulkAdd, useAccessRequests → /admin/users*, /admin/access-requests*", "Roles shown as Admin / Core (Super admin badge; Admin switch and choice disabled for non-super admins); Gender column; Core or Admin and optional gender when adding one; bulk paste with a Download .xlsx template button; Requests tab with a pending count, Approve / Reject (confirm), skeleton and empty state; in-page confirms; last-admin guard"],
     ["(no artboard)", "/admin/events", "EventsScreen", "useEvents → /events; EventEditDialog, DeleteEventConfirm → /events/:id", "Edit event and Delete event from one list"],
