@@ -1,7 +1,7 @@
-// Hourly housekeeping (cron): abandoned uploads, expired sessions and codes, worker scratch left by a crash.
+// Hourly housekeeping (cron): abandoned uploads, stale queue tickets, expired sessions and codes, worker scratch left by a crash.
 import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { assets, jobs, otpCodes, sessions } from '@acm/core/db';
+import { assets, expireUploadTickets, jobs, otpCodes, sessions } from '@acm/core/db';
 import { tusDir } from '@acm/core/paths';
 import { and, eq, inArray, lt } from 'drizzle-orm';
 import type { Ctx } from './context.ts';
@@ -18,6 +18,8 @@ export async function cleanup(ctx: Ctx, now = Date.now()) {
   }
   // tus files with no row at all (e.g. the row was cleaned while a file lingered).
   const orphans = await sweepDir(tusDir(ctx.cfg.MEDIA_ROOT), cutoff.getTime());
+  // The API expires tickets on every grant pass; this catches the ones left when nobody uploads for a while.
+  const tickets = await expireUploadTickets(ctx.db);
   const s = await ctx.db.delete(sessions).where(lt(sessions.expiresAt, new Date(now))).returning({ id: sessions.id });
   const o = await ctx.db.delete(otpCodes).where(lt(otpCodes.expiresAt, new Date(now - 24 * 3600_000))).returning({ id: otpCodes.id });
   // Scratch dirs belong to jobs; anything not for a running job is left over from a crash.
@@ -29,7 +31,7 @@ export async function cleanup(ctx: Ctx, now = Date.now()) {
     await rm(path.join(tmp, d), { recursive: true, force: true });
     scratch++;
   }
-  const result = { abandoned: abandoned.length, orphans, sessions: s.length, codes: o.length, scratch };
+  const result = { abandoned: abandoned.length, orphans, tickets, sessions: s.length, codes: o.length, scratch };
   ctx.log.info(result, 'cleanup');
   return result;
 }

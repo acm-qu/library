@@ -12,6 +12,7 @@ import { type Ctx, type JobScope, Permanent } from '../context.ts';
 import { baseFilter, classify, hlsArgs, ladder, parseMaster, type ProbeJson, sourceReadrate } from '../lib/ffmpeg.ts';
 import { ChildFailed, mediaworker, run } from '../lib/spawn.ts';
 import { getOrCreateKeys, writeKeyInfo } from '../lib/keys.ts';
+import { workerBps } from '../lib/pace.ts';
 import { sealAll, wantsEncryption } from '../lib/seal.ts';
 import { type Out, publish } from './publish.ts';
 
@@ -70,7 +71,8 @@ export async function processVideo(ctx: Ctx, job: Job, a: Asset, src: string, sc
     // Encode: 10% → 90% of the job's progress bar.
     await scope.step(hdr ? 'Converting HDR and encoding' : 'Encoding', 0.1);
     const encStart = Date.now();
-    const readrate = sourceReadrate((await stat(src)).size, c.durationS);
+    // -readrate is fixed for the whole encode: it takes the worker's allocation now and can't yield mid-way.
+    const readrate = sourceReadrate((await stat(src)).size, c.durationS, workerBps());
     const timeoutMs = Math.max(15 * 60_000, c.durationS * 1000 * ((hdr ? 8 : 4) + 1 / readrate));
     let lastOut = 0;
     await run(ctx.cfg.FFMPEG, hlsArgs({ src, out: tmp, rungs, vf, fps: c.fps, vfr: c.vfr, hasAudio: c.hasAudio, keyInfo: keyInfo?.info, readrate }), {

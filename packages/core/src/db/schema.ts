@@ -34,6 +34,7 @@ import {
   ROLES,
   TIERS,
   TONE_CURVES,
+  UPLOAD_TICKET_STATUSES,
   USER_STATUSES,
 } from '../enums.ts';
 
@@ -200,6 +201,37 @@ export const assets = pgTable(
   ],
 );
 
+/** One file's place in the server-wide upload queue (apps/api/src/uploads/tickets.ts). */
+export const uploadTickets = pgTable(
+  'upload_tickets',
+  {
+    id: uuid('id').primaryKey(),
+    uploaderId: uuid('uploader_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id),
+    kind: text('kind', { enum: ASSET_KINDS }).notNull(),
+    bytes: bigint('bytes', { mode: 'number' }).notNull(),
+    /** Private: only ever returned to its uploader. */
+    filename: text('filename').notNull(),
+    girlsOnly: boolean('girls_only').notNull().default(false),
+    status: text('status', { enum: UPLOAD_TICKET_STATUSES }).notNull().default('waiting'),
+    /** The tus upload id once the file has started. */
+    uploadId: text('upload_id'),
+    createdAt: created(),
+    grantedAt: ts('granted_at'),
+    /** Touched by the uploader's queue polls and by every chunk; stale tickets expire (see expireUploadTickets). */
+    lastSeenAt: ts('last_seen_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('upload_tickets_status_created').on(t.status, t.createdAt),
+    check('upload_tickets_kind_check', inList('kind', ASSET_KINDS)),
+    check('upload_tickets_status_check', inList('status', UPLOAD_TICKET_STATUSES)),
+  ],
+);
+
 export const renditions = pgTable(
   'renditions',
   {
@@ -310,6 +342,7 @@ export type User = typeof users.$inferSelect;
 export type AccessRequest = typeof accessRequests.$inferSelect;
 export type Event = typeof events.$inferSelect;
 export type Asset = typeof assets.$inferSelect;
+export type UploadTicket = typeof uploadTickets.$inferSelect;
 export type Rendition = typeof renditions.$inferSelect;
 export type Job = typeof jobs.$inferSelect;
 export type ProcessingRun = typeof processingRuns.$inferSelect;

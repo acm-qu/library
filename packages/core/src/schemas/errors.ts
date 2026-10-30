@@ -12,6 +12,7 @@ export const ERROR_CODES = [
   'too_many_attempts',
   'not_allowed', // an action the viewer can see but may not take, e.g. demoting the last admin
   'conflict',
+  'no_slot', // a tus upload without a granted queue ticket: wait in the upload queue
   'profile_incomplete', // signed in, but name or gender is still missing (the web app sends them to /welcome)
   'unsupported_type',
   'too_large',

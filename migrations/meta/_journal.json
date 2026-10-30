@@ -57,6 +57,13 @@
       "when": 1793377728027,
       "tag": "0007_drop_gender",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793378807032,
+      "tag": "0008_upload_tickets",
+      "breakpoints": true
     }
   ]
 }

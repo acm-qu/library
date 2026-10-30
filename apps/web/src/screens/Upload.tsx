@@ -11,6 +11,7 @@ import { fmtEta } from '../lib/eta.ts';
 import { fileKey, isVideo, type Item, type Tier, uploader, useUploads } from '../lib/uploader.ts';
 import { type EventForm, EventFields, eventBody, FIELD_MSG, invalidFields, TierChoice } from './EventEdit.tsx';
 import { useOnline } from './States.tsx';
+import { UploadQueuePanel } from './UploadQueue.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import { Rich } from '../ui/Rich.tsx';
 
@@ -359,10 +360,10 @@ function Progress({ batch }: { batch: Item[] }) {
   const sent = batch.reduce((s, i) => s + (i.status === 'done' ? i.total : i.sent), 0);
   const done = batch.filter((i) => i.status === 'done').length;
   const { speed, stalled } = useSpeed(sent);
-  const anyActive = batch.some((i) => i.status === 'uploading' || i.status === 'waiting');
+  const anyActive = batch.some((i) => i.status === 'uploading' || i.status === 'waiting' || i.status === 'queued');
   const left = !anyActive || sent >= total ? 'none' : stalled ? (sent ? 'stalled' : 'waiting') : speed > 0 ? fmtEta((total - sent) / speed) : 'none';
   const pct = total ? Math.round((sent / total) * 100) : 0;
-  const order: Record<string, number> = { failed: 0, uploading: 1, paused: 2, waiting: 3, done: 4, cancelled: 5 };
+  const order: Record<string, number> = { failed: 0, uploading: 1, paused: 2, waiting: 3, queued: 4, done: 5, cancelled: 6 };
   const rows = [...batch].sort((a, b) => order[a.status]! - order[b.status]!);
   const SHOW = 30;
 
@@ -390,6 +391,7 @@ function Progress({ batch }: { batch: Item[] }) {
         ))}
       </ul>
       {rows.length > SHOW && <span className="t-sm subtle">{t('upload.moreWaiting', { n: rows.length - SHOW })}</span>}
+      <UploadQueuePanel />
     </section>
   );
 }
@@ -397,8 +399,8 @@ function Progress({ batch }: { batch: Item[] }) {
 function ProgressRow({ i }: { i: Item }) {
   const { t } = useTranslation();
   const pct = i.total ? Math.floor((i.sent / i.total) * 100) : 0;
-  const cls = { waiting: 'st-q', uploading: 'st-p', paused: 'st-q', done: 'st-ok', failed: 'st-x', cancelled: 'st-q' }[i.status];
-  const icon = { waiting: 'clock', uploading: 'upload', paused: 'clock', done: 'check', failed: 'alert', cancelled: 'close' }[i.status] as 'clock';
+  const cls = { queued: 'st-q', waiting: 'st-q', uploading: 'st-p', paused: 'st-q', done: 'st-ok', failed: 'st-x', cancelled: 'st-q' }[i.status];
+  const icon = { queued: 'clock', waiting: 'clock', uploading: 'upload', paused: 'clock', done: 'check', failed: 'alert', cancelled: 'close' }[i.status] as 'clock';
   return (
     <li className="stack" style={{ gap: 8 }}>
       <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
@@ -413,7 +415,7 @@ function ProgressRow({ i }: { i: Item }) {
         </span>
         <span className={`st ${cls}`}>
           <Icon name={icon} />
-          {t(`upload.st_${i.status}`, { pct })}
+          {t(`upload.st_${i.status}`, { pct, n: i.position ?? 0 })}
         </span>
         {i.status === 'uploading' && (
           <button className="btn btn-g btn-sm btn-ic" aria-label={t('upload.pause', { name: i.file.name })} onClick={() => uploader.pause(i.key)}>

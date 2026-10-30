@@ -1,28 +1,34 @@
 // tus endpoint (resumable uploads), My uploads and Retry.
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { ServerConfig } from '@acm/core/config';
-import { assets, type Db, events, jobs } from '@acm/core/db';
+import { assets, type Db, events, jobs, uploadTickets, users } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { tusDir } from '@acm/core/paths';
-import { type MyUploadItem, MyUploadsQuery, UploadMetadata } from '@acm/core/schemas';
+import { type MyUploadItem, MyUploadsQuery, UploadMetadata, type UploadQueue, UploadTicketBody } from '@acm/core/schemas';
 import { FileStore } from '@tus/file-store';
 import { EVENTS, Server } from '@tus/server';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireCore, viewerOf } from '../auth/plugin.ts';
 import { audit } from '../lib/audit.ts';
 import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { HttpError, notFound } from '../lib/errors.ts';
+import { makeLimiter } from '../lib/limits.ts';
 import { activeJobs, byAsset } from '../lib/queue.ts';
 import { ingest, UnsupportedType } from '../uploads/ingest.ts';
 import { wakeWorker } from '../lib/wake.ts';
-import { paced, takeUpload } from '../media/throttle.ts';
+import { ioRates, paced, takeUpload } from '../media/throttle.ts';
+import { grantTickets, MAX_UPLOAD_SLOTS, releaseUpload, ticketState } from '../uploads/tickets.ts';
 import { girlsOk } from '../policy/visibleSql.ts';
 
 /** Set by Fastify after auth and overwritten on every request, so a client can never supply it. */
 const USER_HEADER = 'x-acm-uploader';
+/** Every tus request from the browser names its granted queue ticket; PATCHes without a live one get 409 no_slot. */
+const TICKET_HEADER = 'upload-ticket';
+const TicketId = z.uuid();
 const ALLOWED_EXT = /^[a-z0-9]{1,10}$/;
 
 /**
@@ -39,7 +45,7 @@ function setInternalHeader(raw: FastifyRequest['raw'], name: string, value: stri
   raw.headers[name] = value;
 }
 
-/** Every PATCH body together is written at the live upload rate (2–21 MiB/s, see uploadRate), whatever the client does. */
+/** Every PATCH body together is written at the live upload rate (media/throttle.ts), whatever the client does. */
 class PacedFileStore extends FileStore {
   override write(readable: Parameters<FileStore['write']>[0], id: string, offset: number) {
     return super.write(Readable.from(paced(readable, takeUpload), { highWaterMark: 1 }), id, offset);
@@ -61,6 +67,14 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
       if (upload.size === undefined) throw tusError(400, 'bad_request', 'The upload length must be known.');
       const [ev] = await db.select({ id: events.id }).from(events).where(and(eq(events.id, meta.data.eventId), isNull(events.deletedAt)));
       if (!ev) throw tusError(404, 'not_found', 'Not found.');
+      const [ticket] = meta.data.ticketId
+        ? await db
+            .update(uploadTickets)
+            .set({ uploadId: upload.id, lastSeenAt: new Date() })
+            .where(and(eq(uploadTickets.id, meta.data.ticketId), eq(uploadTickets.uploaderId, uploaderId), eq(uploadTickets.status, 'granted')))
+            .returning({ id: uploadTickets.id })
+        : [];
+      if (!ticket) throw tusError(409, 'no_slot', 'Wait for a free upload slot.');
       const ext = path.extname(meta.data.filename).slice(1).toLowerCase();
       await db.insert(assets).values({
         id: newId(),
@@ -87,12 +101,16 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
         if (e instanceof UnsupportedType) throw tusError(415, 'unsupported_type', "That file type isn't supported.");
         app.log.error({ err: e, uploadId: upload.id }, 'ingest failed');
         throw tusError(500, 'internal', 'Something went wrong on our side.');
+      } finally {
+        // The bytes are in either way, so the slot goes to the next file in line.
+        await releaseUpload(db, upload.id, 'done').catch((err) => app.log.error({ err }, 'ticket release failed'));
       }
     },
   });
-  // A cancelled upload (tus termination) takes its "uploading" row with it.
+  // A cancelled upload (tus termination) takes its "uploading" row and its queue slot with it.
   tus.on(EVENTS.POST_TERMINATE, (_req, _res, id: string) => {
     void db.delete(assets).where(and(eq(assets.uploadId, id), eq(assets.status, 'uploading'))).catch((err) => app.log.error({ err }, 'terminate cleanup failed'));
+    void releaseUpload(db, id, 'cancelled').catch((err) => app.log.error({ err }, 'ticket release failed'));
   });
 
   void app.register(async (scope) => {
@@ -108,8 +126,20 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
       if (id) {
         const [own] = await db.select({ uploaderId: assets.uploaderId }).from(assets).where(eq(assets.uploadId, id));
         if (!own || own.uploaderId !== v.id) throw notFound();
-        // Each chunk marks the row as alive; one untouched for an hour no longer counts as active.
-        if (req.method === 'PATCH') await db.update(assets).set({ updatedAt: new Date() }).where(and(eq(assets.uploadId, id), eq(assets.status, 'uploading')));
+        if (req.method === 'PATCH') {
+          // A chunk needs a granted ticket; it links the ticket to this upload (a resume after a pause has a new one) and keeps it alive.
+          const t = TicketId.safeParse(req.headers[TICKET_HEADER]);
+          const [ok] = t.success
+            ? await db
+                .update(uploadTickets)
+                .set({ uploadId: id, lastSeenAt: new Date() })
+                .where(and(eq(uploadTickets.id, t.data), eq(uploadTickets.uploaderId, v.id), eq(uploadTickets.status, 'granted')))
+                .returning({ id: uploadTickets.id })
+            : [];
+          if (!ok) throw new HttpError('no_slot');
+          // Each chunk marks the row as alive; one untouched for an hour no longer counts as active.
+          await db.update(assets).set({ updatedAt: new Date() }).where(and(eq(assets.uploadId, id), eq(assets.status, 'uploading')));
+        }
       }
       // A finished upload's tus files are gone; answer a resuming client's HEAD from the asset row instead.
       if (req.method === 'HEAD' && id) {
@@ -226,6 +256,80 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
       .from(assets)
       .where(and(eq(assets.eventId, eventId), isNull(assets.deletedAt), girlsOk(viewerOf(req)), sql`${assets.status} not in ('deleting', 'uploading')`));
     return { items: rows };
+  });
+
+  const limitTickets = makeLimiter(app, 'uploadTickets', (req) => viewerOf(req).id);
+
+  /** A place in the server-wide upload queue for one file; the tus create must carry it once granted. */
+  app.post('/api/uploads/tickets', { preHandler: requireCore }, async (req) => {
+    const v = viewerOf(req);
+    await limitTickets(req);
+    const body = UploadTicketBody.parse(req.body);
+    if (body.bytes > cfg.UPLOAD_MAX_BYTES) throw new HttpError('too_large');
+    const [ev] = await db.select({ id: events.id }).from(events).where(and(eq(events.id, body.eventId), isNull(events.deletedAt)));
+    if (!ev) throw notFound();
+    const id = newId();
+    await db.insert(uploadTickets).values({ id, uploaderId: v.id, eventId: ev.id, kind: body.kind, bytes: body.bytes, filename: body.filename, girlsOnly: body.girlsOnly });
+    await grantTickets(db);
+    const t = await ticketState(db, id);
+    if (!t) throw new HttpError('internal');
+    return t;
+  });
+
+  /** Gives up a place in the queue (a file cancelled or paused before it finished). */
+  app.delete('/api/uploads/tickets/:id', { preHandler: requireCore }, async (req) => {
+    const v = viewerOf(req);
+    const { id } = z.object({ id: z.uuid() }).parse(req.params);
+    const [t] = await db
+      .update(uploadTickets)
+      .set({ status: 'cancelled' })
+      .where(and(eq(uploadTickets.id, id), eq(uploadTickets.uploaderId, v.id), inArray(uploadTickets.status, ['waiting', 'granted'])))
+      .returning({ id: uploadTickets.id });
+    if (!t) throw notFound();
+    await grantTickets(db);
+    return { ok: true };
+  });
+
+  /**
+   * The public upload queue for every core member: who is uploading or waiting, with kind, size and progress only.
+   * Filenames and ticket ids go to their own uploader alone; events, assets and girls-only flags never appear.
+   */
+  app.get('/api/uploads/queue', { preHandler: requireCore }, async (req): Promise<UploadQueue> => {
+    const v = viewerOf(req);
+    // Polling is what keeps this person's not-yet-started tickets alive; started ones live on their chunks.
+    await db
+      .update(uploadTickets)
+      .set({ lastSeenAt: new Date() })
+      .where(and(eq(uploadTickets.uploaderId, v.id), inArray(uploadTickets.status, ['waiting', 'granted']), isNull(uploadTickets.uploadId)));
+    await grantTickets(db);
+    const rows = await db
+      .select({ t: uploadTickets, name: users.name })
+      .from(uploadTickets)
+      .innerJoin(users, eq(users.id, uploadTickets.uploaderId))
+      .where(inArray(uploadTickets.status, ['granted', 'waiting']))
+      .orderBy(sql`${uploadTickets.status} <> 'granted'`, asc(uploadTickets.createdAt), asc(uploadTickets.id));
+    // The tus file's size is the offset received so far: one stat per uploading file (at most MAX_UPLOAD_SLOTS).
+    const received = await Promise.all(
+      rows.map(({ t }) =>
+        t.status !== 'granted' ? null : t.uploadId && /^[\w-]+$/.test(t.uploadId) ? stat(path.join(tusDir(cfg.MEDIA_ROOT), t.uploadId)).then((s) => s.size, () => null) : 0,
+      ),
+    );
+    const at = { granted: 0, waiting: 0 };
+    return {
+      slots: MAX_UPLOAD_SLOTS,
+      inUse: rows.filter((r) => r.t.status === 'granted').length,
+      rateBps: Math.round(ioRates().upload),
+      items: rows.map(({ t, name }, i) => ({
+        position: ++at[t.status as 'granted' | 'waiting'],
+        state: t.status === 'granted' ? 'uploading' : 'waiting',
+        uploader: name,
+        kind: t.kind === 'video' ? 'video' : 'photo',
+        bytes: t.bytes,
+        progress: received[i] ?? null,
+        createdAt: t.createdAt.toISOString(),
+        ...(t.uploaderId === v.id ? { ticketId: t.id, filename: t.filename } : {}),
+      })),
+    };
   });
 
   app.post('/api/uploads/:assetId/retry', { preHandler: requireCore }, async (req) => {

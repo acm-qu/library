@@ -602,41 +602,86 @@ After ingest queues the job, the API calls `wakeWorker` (`apps/api/src/lib/wake.
 
 </Callout>
 
-### Step 12: a hard budget for every step of uploading and playing videos (done, 201e416)
+### Step 12: a hard budget for every step of uploading and playing videos (done, 201e416; priority pool and upload queue added later)
 
-The account's limits are shared by every site on it, so each step gets a fixed share instead of relying on the steps never overlapping. The target is that the worst case, with everything running at once, stays at or under about 70% of every limit (SPEED 400%, PMEM 4 GB, IO 30 MB/s, NPROC 200, EP 150):
+The account's limits are shared by every site on it, so the library keeps every step under a line instead of relying on the steps never overlapping. The target is that the worst case, with everything running at once, stays at or under about 70% of every limit (SPEED 400%, PMEM 4 GB, IO 30 MB/s, NPROC 200, EP 150).
+
+#### Disk IO: one priority pool under the 21 MiB/s line
+
+All disk IO the library causes shares one pool of 21 MiB/s (70% of 30), in strict priority order: **1 playback and downloads of large media** (HLS segments, originals), **2 uploads** (all tus PATCH bodies together), **3 the worker** (hash, seal, unseal and re-tier, and the encode's source read), **4 small files** (thumbs, posters, views). The allocator is `allocate()` in `apps/api/src/media/throttle.ts`; once a second while the API moves bytes it:
+
+1. measures the account's disk IO from `/proc` (`ioSince` in `apps/api/src/lib/compute.ts`) and splits it into the API's own process, the worker's processes (cmdlines matching `worker/*.mjs`, `mediaworker`, `ffmpeg` or `ffprobe`) and other sites (account minus both, never negative);
+2. takes each class's demand: an API class with takes held by its budget wants all it can get, otherwise what it asked for in the last second; the worker wants all it can get while its processes do more than 64 KiB/s;
+3. gives every class with demand `min(demand, share)` first, with shares **playback 5, uploads 5, worker 8, small 3 MiB/s** (summing to the line);
+4. lends what's left of the line (minus other sites' IO) in priority order, each class up to its remaining demand; if other sites eat past the unused shares, the guaranteed shares shrink proportionally (never below a 1 MiB/s pool in total);
+5. runs each class at its allocation but never below its (scaled) share, so a light class can always burst to its share at once; anything it lent comes back within a second.
+
+So when everything is busy at once the caps are exactly 5 / 5 / 8 / 3, and an idle class's share flows to the others by priority. These are the unit-test cases in `apps/api/test/compute.test.ts` (MiB/s):
+
+<Table
+  id="io-pool"
+  columns={["Demand (playback / uploads / worker / small)", "Other sites", "Allocation (playback / uploads / worker / small)", "Why"]}
+  rows={[
+    ["0 / 25 / 0 / 0", "0", "0 / 21 / 0 / 0", "only uploads: the whole line"],
+    ["12 / 20 / 0 / 0", "0", "12 / 9 / 0 / 0", "shares 5 + 5, then playback borrows 7 and uploads the last 4"],
+    ["12 / 20 / 10 / 0", "0", "8 / 5 / 8 / 0", "shares 5 + 5 + 8, playback borrows the 3 left"],
+    ["3 / 20 / 10 / 0", "0", "3 / 10 / 8 / 0", "light playback; uploads borrow the 5 left"],
+    ["12 / 20 / 10 / 6", "0", "5 / 5 / 8 / 3", "everything saturated: exactly the shares"],
+    ["2 / 20 / 4 / 1", "0", "2 / 14 / 4 / 1", "light classes keep what they ask for; uploads take the rest"],
+    ["12 / 20 / 10 / 6", "6", "≈ 3.57 / 3.57 / 5.71 / 2.14 (sum 15)", "no lendable pool left: the shares scale by 15/21"]
+  ]}
+/>
+
+What is approximate: demand is measured over the last second, so a class that wakes up can overshoot by up to its share for about a second; the worker learns its allocation from `MEDIA_ROOT/io-alloc.json` (atomically rewritten when it changes and every 5 s, read at most once a second by `apps/worker/src/lib/pace.ts`), and falls back to the fixed 8 MiB/s when the file is missing or more than 10 s old (the API is idle); ffmpeg's `-readrate` is fixed per encode, so an encode takes its allocation at start (never above the 5 MiB/s source cap) and a running encode can't yield mid-way; the API's ingest ffprobe counts as worker IO. Page-cache hits count as demand but not as disk IO, so the pool is conservative.
+
+```latex
+g_c = \min(d_c,\ s_c),\quad s = (5,\ 5,\ 8,\ 3)\ \text{MiB/s}
+\qquad
+L = 21 - \text{others} - \textstyle\sum_c g_c
+\qquad
+a_c = \begin{cases} g_c + \text{lent}_c \ (\text{by priority, up to } d_c) & L \ge 0 \\ g_c \cdot \dfrac{21 - \text{others}}{\sum_c g_c} & L < 0 \end{cases}
+\qquad
+\text{IO}_{\max} = \sum_c a_c \le 21\ \text{MiB/s} \approx 70\%\ \text{of}\ 30
+\qquad
+\text{CPU}_{\max} \approx \underbrace{200\%}_{\text{worker}} + \underbrace{50\%}_{\text{API}} \approx 64\%\ \text{of}\ 400\%
+```
+
+The IO total is 70% if the host's MB/s means MiB/s, as LVE's KB/s settings suggest, and 73% (22 MB/s) if it means `10^6` bytes.
+
+#### How each step is enforced
 
 <Table
   id="budget"
-  columns={["Step", "CPU (limit 400%)", "Disk IO (limit 30 MB/s)", "How it is enforced"]}
+  columns={["Step", "CPU (limit 400%)", "Disk IO (pool share, priority)", "How it is enforced"]}
   rows={[
-    ["Upload (all tus PATCH bodies together)", "API, light", "live: whatever the 21 MiB/s line leaves (2–21 MiB/s), all uploaders split it; server-enforced", "apps/api/src/media/throttle.ts takeUpload, applied in a FileStore subclass in apps/api/src/routes/uploads.ts; the browser's chunkPacer (apps/web/src/lib/uploader.ts) stays as a courtesy"],
-    ["Hash, seal, unseal, re-tier", "worker, light", "≤ 8 MiB/s", "apps/worker/src/lib/pace.ts (pacer) in hash.ts, seal.ts and retier.ts; packages/core/src/crypto/aeadFile.ts takes an optional pace hook"],
-    ["Encode (HLS ladder) and keyframe scan", "≤ 200% (pinned to CPUs 2-3)", "source read ≤ 5 MiB/s; at most 2.5× real time, so HLS writes ≈ 3 MB/s", "taskset -c 2-3 in apps/worker/src/lib/spawn.ts; ffmpeg -readrate from sourceReadrate() and frames.readrate() (0.05× to 2.5× / 20×); HDR tone-mapping runs after the downscale to the top rung"],
-    ["Serving: large files (> 1 MiB: originals, HLS data.ts)", "API, light", "≤ 5 MiB/s for all viewers together", "throttle.ts: classed by the whole file's size, so Range slices (HLS segments) are paced too; at most 32 held responses, then 429 with Retry-After 5 (hls.js retries fragments on 429)"],
-    ["Serving: small files (≤ 1 MiB: thumbs, views, posters)", "API, light", "≤ 3 MiB/s for all viewers together", "throttle.ts SMALL_BPS; one chunk buffered per response"],
+    ["Serving: large files (> 1 MiB: originals, HLS data.ts)", "API, light", "5 MiB/s guaranteed, priority 1, borrows up to the line", "throttle.ts playback pool: classed by the whole file's size, so Range slices (HLS segments) are paced too; at most 32 held responses, then 429 with Retry-After 5 (hls.js retries fragments on 429)"],
+    ["Upload (all tus PATCH bodies together)", "API, light", "5 MiB/s guaranteed, priority 2; at most 4 files at once across all users", "throttle.ts takeUpload in a FileStore subclass in apps/api/src/routes/uploads.ts; the upload ticket queue (apps/api/src/uploads/tickets.ts); the browser's chunkPacer (21 MiB/s per file) stays as a courtesy"],
+    ["Hash, seal, unseal, re-tier", "worker, light", "8 MiB/s guaranteed, priority 3 (fixed 8 when the API is idle)", "apps/worker/src/lib/pace.ts reads its live rate from io-alloc.json in hash.ts, seal.ts and retier.ts; packages/core/src/crypto/aeadFile.ts takes an optional pace hook"],
+    ["Encode (HLS ladder) and keyframe scan", "≤ 200% (pinned to CPUs 2-3)", "source read ≤ min(allocation, 5 MiB/s) at encode start; at most 2.5× real time, so HLS writes ≈ 3 MB/s", "taskset -c 2-3 in apps/worker/src/lib/spawn.ts; ffmpeg -readrate from sourceReadrate() and frames.readrate() (0.05× to 2.5× / 20×); HDR tone-mapping runs after the downscale to the top rung"],
+    ["Serving: small files (≤ 1 MiB: thumbs, views, posters)", "API, light", "3 MiB/s guaranteed, priority 4", "throttle.ts small pool; one chunk buffered per response"],
     ["Cron jobs, wake, deploy", "≤ 200% (same 2 cores)", "deploy copy ≤ 8 MB/s", "taskset -c 2-3 nice -n 19 in deploy/crontab.template, WORKER_WAKE and scripts/deploy.sh; rsync --bwlimit=8000"],
   ]}
 />
 
-```latex
-\text{upload}_{\text{bps}} = \operatorname{clamp}\big(21 - (\text{account IO} - \text{upload IO}),\ 2,\ 21\big)\ \text{MiB/s}
-\qquad
-\text{IO}_{\max} = \underbrace{8}_{\text{worker}} + \underbrace{5 + 3}_{\text{serving}} + \underbrace{\geq 5}_{\text{uploads fill the rest}} = 21\ \text{MiB/s} \approx 70\%\ \text{of}\ 30\ \text{MiB/s}
-\qquad
-\text{CPU}_{\max} \approx \underbrace{200\%}_{\text{worker}} + \underbrace{50\%}_{\text{API}} \approx 250\% \approx 64\%\ \text{of}\ 400\%
-```
+#### The upload queue: 4 slots for everyone
 
-The hash/seal step and the encode never run at the same time (the worker does one step after another), so the worker's share is the larger of the two, 8 MiB/s. The IO total is 70% if the host's MB/s means MiB/s, as LVE's KB/s settings suggest, and 73% (22 MB/s) if it means `10^6` bytes. Other limits:
+At most `MAX_UPLOAD_SLOTS = 4` files upload at once across all users, and at most 2 per person (`SLOTS_PER_USER`, because a browser uploads 2 files at a time, so a 3rd slot would sit idle while others wait); they share the uploads' live rate, and every further file waits first come, first served in `upload_tickets`:
 
-- **Dynamic upload rate:** `apps/api/src/media/throttle.ts` samples the whole account's disk IO from `/proc` once a second while uploads flow (`accountIoSince` in `apps/api/src/lib/compute.ts`) and gives uploads `21 MiB/s` minus everything else (encodes, serving, the other sites), never below 2 or above 21; before the first sample and off Linux it uses 5 MiB/s, and the sampler stops after 10 quiet seconds. A lone uploader on a quiet account gets the full 21 MiB/s; three uploaders split it. The browser's per-file cap is 21 MiB/s so it never holds a lone uploader back.
-- **Entry processes (150):** at most 32 paced large responses are held at once (`MAX_PACED`); the 33rd gets a 429 before any header is sent. Paced streams buffer one chunk, not 16, so a slow client holds little memory.
+- **Tickets.** The browser asks for one ticket per file (`POST /api/uploads/tickets`, core only, rate-limited to 1,500 per 10 minutes per user) and shows "Queued · #N in line" until it is granted. The tus POST carries the granted ticket in its metadata and every PATCH names it in an `Upload-Ticket` header; without a live one the API answers 409 `no_slot` and the browser queues the file again (it resumes at the server's offset).
+- **Grants.** Lazily, on every queue read and every ticket create, finish or cancel: while fewer than 4 are granted, the oldest waiting ticket is granted, in one transaction under a Postgres advisory lock so two requests can't over-grant. Finishing an upload (ingest) marks its ticket done and a tus termination marks it cancelled, and the next one in line is granted.
+- **Expiry, so slots never leak.** A granted ticket with no chunk and no poll for 2 minutes expires, and so does a waiting one whose browser hasn't polled for 60 seconds. The grant pass and the hourly cleanup (`apps/worker/src/cleanup.ts`) both run it.
+- **The browser** still starts at most 2 files, at most 1 of them a video; a granted ticket it can't start yet keeps its slot only while it keeps polling (`GET /api/uploads/queue` every 5 s). Pausing gives the ticket back.
+- **The public queue.** `GET /api/uploads/queue` lists every active ticket to every core member: position, uploading or waiting, uploader name, photo or video, size, bytes received so far, and the time it joined, plus `{slots, inUse, rateBps}`. Filenames and ticket ids appear only on the caller's own rows; events, asset ids, media URLs and girls-only flags never do. The Upload screen (step 3) and My uploads show it as an "Upload queue" panel.
+
+Other limits:
+
+- **Entry processes (150):** at most 32 paced large responses are held at once (`MAX_PACED`); the 33rd gets a 429 before any header is sent. Paced streams buffer one chunk, not 16, so a slow client holds little memory. At most 4 uploads hold a request at a time.
 - **Processes (200):** the API keeps at most one `WORKER_WAKE` waiter alive (apps/api/src/lib/wake.ts), so a batch of uploads no longer starts one 20-second `flock` per file. Torch uses one inter-op thread (`set_num_interop_threads(1)`).
 - **Memory (4 GB):** Pillow refuses images over 120 MP (`MAX_IMAGE_PIXELS = 60_000_000`, which Pillow enforces at 2×), so one decode stays around 1.1-1.4 GB. HDR tone-mapping now works on frames of at most 1080p instead of full 4K float RGB.
 - **Ingest probe:** the API's ffprobe at upload finish runs at nice 19.
 - **Backups:** `deploy/backup.sh` reads only `DATABASE_URL` from `shared/.env` instead of sourcing it (sourcing failed on the `SMTP_PASS` line, so `~/backups` was empty), and dumps at nice 19 under `ionice -c3`.
 
-Costs: hashing a 150 MB video takes about 18 s instead of 2; an encode of a source above 5 MiB/s (for example 4K at 100 Mb/s) runs no faster than about 0.4× real time, and on 2 cores a 1080p ladder encodes slower than before; one 1080p stream needs about 0.75 MB/s, so about 7 people can start videos at the same moment before playback waits on the 5 MiB/s budget (repeat views come from memory and cost nothing). Two uploads at once now share 5 MiB/s instead of getting 5 each. A job queued while a woken worker is exiting waits for the next cron run, at most 2 minutes.
+Costs: hashing a 150 MB video takes about 18 s at the worker's 8 MiB/s share instead of 2 (faster when nothing else is busy); an encode of a source above 5 MiB/s (for example 4K at 100 Mb/s) runs no faster than about 0.4× real time, and on 2 cores a 1080p ladder encodes slower than before; one 1080p stream needs about 0.75 MB/s, so about 7 people can start videos at the same moment within playback's 5 MiB/s share, and more when uploads and the worker are quiet (repeat views come from memory and cost nothing). A fifth file waits for a slot even when the line has room. A job queued while a woken worker is exiting waits for the next cron run, at most 2 minutes.
 
 ## 6. Verification
 

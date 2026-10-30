@@ -13,7 +13,7 @@ import { screenRoutes } from './screens.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import { SearchBox } from '../ui/SearchBox.tsx';
 import { useTabIndicator } from '../ui/useTabIndicator.ts';
-import { useMyUploads } from '../data/uploads.ts';
+import { useMyUploads, useUploadQueueSync } from '../data/uploads.ts';
 import { readyAt } from '../i18n/format.ts';
 
 export const initials = (name: string, email: string) => {
@@ -37,6 +37,7 @@ export function AppShell() {
   const navBar = useTabIndicator<HTMLElement>('line-bottom', loc.pathname);
   const tabBar = useTabIndicator<HTMLElement>('line-top', loc.pathname);
   useEffect(() => onSessionExpired(() => setExpired(true)), []);
+  useUploadQueueSync(me.data?.role === 'core');
 
   if (me.isPending) return <ShellSkeleton />;
   if (me.isError) return <ServerError reference={me.error instanceof ApiError ? me.error.body.reference : undefined} onRetry={() => void me.refetch()} />;

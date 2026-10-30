@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ServerConfig } from '@acm/core/config';
 import type { Db } from '@acm/core/db';
+import { ioAllocPath } from '@acm/core/paths';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -14,6 +15,7 @@ import { registerCsrf } from './lib/csrf.ts';
 import { HttpError, registerErrorHandling } from './lib/errors.ts';
 import { LIMITS } from './lib/limits.ts';
 import { createMailer, type Mailer } from './mail/mailer.ts';
+import { setAllocFile } from './media/throttle.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { assetRoutes } from './routes/assets.ts';
 import { authRoutes } from './routes/auth.ts';
@@ -70,6 +72,7 @@ export async function buildApp(deps: AppDeps) {
     bodyLimit: 64 * 1024,
   });
   const mailer = deps.mailer ?? createMailer(cfg, app.log);
+  setAllocFile(ioAllocPath(cfg.MEDIA_ROOT));
 
   registerErrorHandling(app);
   await app.register(helmet, {

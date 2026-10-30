@@ -6,6 +6,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 export const HOST_LIMITS = { threads: 200, cpuPct: 400, ioBps: 30 * 2 ** 20 };
 // The library's processes: the API (lsnode …/acm-media/app), the worker and its flock/sh wrappers, Python and ffmpeg.
 const APP = /acm-media|mediaworker|\/bin\/ffmpeg|\/bin\/ffprobe/;
+// The worker's processes (cron entries worker/*.mjs, Python, ffmpeg), for the IO allocator; the API's ingest ffprobe counts here too.
+const WORKER = /worker\/[\w-]+\.mjs|mediaworker|\/bin\/ffmpeg|\/bin\/ffprobe/;
 
 /** utime + stime (clock ticks) and thread count from a /proc/<pid>/stat line; the name in (…) may contain spaces. */
 export function parseStat(line: string) {
@@ -19,7 +21,7 @@ export function parseIo(text: string) {
   return get('read_bytes') + get('write_bytes');
 }
 
-type Proc = { ticks: number; threads: number; io: number; app: boolean };
+type Proc = { ticks: number; threads: number; io: number; app: boolean; worker: boolean };
 
 async function snapshot(uid: number) {
   const out = new Map<string, Proc>();
@@ -32,7 +34,8 @@ async function snapshot(uid: number) {
         readFile(`/proc/${pid}/io`, 'utf8').catch(() => ''),
         readFile(`/proc/${pid}/cmdline`, 'utf8').catch(() => ''),
       ]);
-      out.set(pid, { ...parseStat(st), io: parseIo(io), app: APP.test(cmd.replaceAll('\0', ' ')) });
+      const line = cmd.replaceAll('\0', ' ');
+      out.set(pid, { ...parseStat(st), io: parseIo(io), app: APP.test(line), worker: WORKER.test(line) });
     } catch {
       /* exited meanwhile */
     }
@@ -40,23 +43,30 @@ async function snapshot(uid: number) {
   return out;
 }
 
-let lastIo: { at: number; io: Map<string, number> } | null = null;
+let lastIo: { at: number; io: Map<string, Proc> } | null = null;
 
-/** Disk bytes/s of every process of this account since the previous call; null on the first call or off Linux. */
-export async function accountIoSince(): Promise<number | null> {
+export type IoSplit = { account: number; self: number; worker: number };
+
+/** Disk bytes/s since the previous call: the whole account, this process, the worker's processes. Null on the first call or off Linux. */
+export async function ioSince(): Promise<IoSplit | null> {
   const uid = process.getuid?.();
   if (process.platform !== 'linux' || uid === undefined) return null;
   const snap = await snapshot(uid);
   const now = Date.now();
   const prev = lastIo;
-  lastIo = { at: now, io: new Map([...snap].map(([pid, p]) => [pid, p.io])) };
+  lastIo = { at: now, io: snap };
   if (!prev || now <= prev.at) return null;
-  let bytes = 0;
+  const secs = (now - prev.at) / 1000;
+  const out = { account: 0, self: 0, worker: 0 };
   for (const [pid, p] of snap) {
     const before = prev.io.get(pid);
-    if (before !== undefined) bytes += Math.max(0, p.io - before);
+    if (!before) continue;
+    const bps = Math.max(0, p.io - before.io) / secs;
+    out.account += bps;
+    if (pid === String(process.pid)) out.self += bps;
+    else if (p.worker) out.worker += bps;
   }
-  return bytes / ((now - prev.at) / 1000);
+  return out;
 }
 
 const zero = { threads: 0, cpuPct: 0, ioBps: 0 };

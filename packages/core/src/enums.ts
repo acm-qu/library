@@ -16,6 +16,8 @@ export const ASSET_STATUSES = [
   'original_only',
   'deleting',
 ] as const;
+// A file's place in the server-wide upload queue: waiting → granted (may upload) → done / cancelled / expired.
+export const UPLOAD_TICKET_STATUSES = ['waiting', 'granted', 'done', 'cancelled', 'expired'] as const;
 export const HDR_FORMATS = ['sdr', 'hlg', 'pq', 'unknown'] as const;
 export const JOB_KINDS = ['process', 'reprocess', 'retier', 'purge'] as const;
 export const JOB_STATES = ['queued', 'running', 'done', 'failed', 'cancelled'] as const;
@@ -44,3 +46,4 @@ export type ToneCurve = (typeof TONE_CURVES)[number];
 export type UserStatus = (typeof USER_STATUSES)[number];
 export type JobOutcome = (typeof JOB_OUTCOMES)[number];
 export type CurveSource = (typeof CURVE_SOURCES)[number];
+export type UploadTicketStatus = (typeof UPLOAD_TICKET_STATUSES)[number];

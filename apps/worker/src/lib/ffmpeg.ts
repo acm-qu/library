@@ -110,13 +110,13 @@ const scaleFor = (h: number) => `scale=w='if(gte(iw,ih),-2,${h})':h='if(gte(iw,i
 export const SOURCE_READ_BPS = 5 * 2 ** 20;
 
 /**
- * ffmpeg's -readrate (a multiple of real time) that keeps reading under SOURCE_READ_BPS for a file of `bytes`
- * lasting `durationS`. Floored at 0.05× so a very high-bitrate source still finishes; capped at 2.5× real time so
- * the HLS writes (≈ 1.25 MB/s per 1× of video) stay near 3 MB/s.
+ * ffmpeg's -readrate (a multiple of real time) that keeps reading under `bps` (never above SOURCE_READ_BPS) for a
+ * file of `bytes` lasting `durationS`. Floored at 0.05× so a very high-bitrate source still finishes; capped at 2.5×
+ * real time so the HLS writes (≈ 1.25 MB/s per 1× of video) stay near 3 MB/s.
  */
-export function sourceReadrate(bytes: number, durationS: number) {
+export function sourceReadrate(bytes: number, durationS: number, bps = SOURCE_READ_BPS) {
   if (!(bytes > 0) || !(durationS > 0)) return 1;
-  return Math.min(2.5, Math.max(0.05, SOURCE_READ_BPS / (bytes / durationS)));
+  return Math.min(2.5, Math.max(0.05, Math.min(bps, SOURCE_READ_BPS) / (bytes / durationS)));
 }
 
 export function hlsArgs(o: {

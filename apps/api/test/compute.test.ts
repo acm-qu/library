@@ -26,8 +26,8 @@ describe('media serving budget', () => {
 
   it('paces small files through their own budget', async () => {
     const { Readable } = await import('node:stream');
-    const { servedAs, SMALL_BPS } = await import('../src/media/throttle.ts');
-    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SMALL_BPS / 16)); // the 2nd-4th wait 1/16 s each
+    const { servedAs, SHARES } = await import('../src/media/throttle.ts');
+    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SHARES.small / 16)); // an idle class starts at its share: each waits 1/16 s
     const t0 = Date.now();
     await drain(servedAs(Readable.from(chunks), 1024));
     expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
@@ -35,8 +35,8 @@ describe('media serving budget', () => {
 
   it('paces a small Range slice of a big file by the file, not the slice', async () => {
     const { Readable } = await import('node:stream');
-    const { servedAs, SERVE_BPS, PACE_OVER } = await import('../src/media/throttle.ts');
-    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SERVE_BPS / 32)); // a 640 KiB slice: the 2nd-4th wait 1/32 s each
+    const { servedAs, SHARES, PACE_OVER } = await import('../src/media/throttle.ts');
+    const chunks = Array.from({ length: 4 }, () => Buffer.alloc(SHARES.playback / 32)); // a 640 KiB slice: each waits 1/32 s
     expect(chunks.length * chunks[0]!.length).toBeLessThan(PACE_OVER);
     const t0 = Date.now();
     await drain(servedAs(Readable.from(chunks), 500 * 2 ** 20));
@@ -74,14 +74,44 @@ describe('worker wake', () => {
   });
 });
 
-describe('live upload rate', () => {
-  it('gives uploads what the 70% line leaves, between 2 and 21 MiB/s', async () => {
-    const { uploadRate, IO_TARGET_BPS, UPLOAD_FLOOR_BPS, UPLOAD_START_BPS } = await import('../src/media/throttle.ts');
-    const MiB = 2 ** 20;
-    expect(uploadRate(null, 0)).toBe(UPLOAD_START_BPS); // nothing measured yet
-    expect(uploadRate(0, 0)).toBe(IO_TARGET_BPS); // a quiet account: uploads get the whole 21
-    expect(uploadRate(21 * MiB, 21 * MiB)).toBe(IO_TARGET_BPS); // only uploads are writing: keep the full rate
-    expect(uploadRate(13 * MiB, 3 * MiB)).toBe(11 * MiB); // 10 MiB/s of encoding and serving leaves 11
-    expect(uploadRate(40 * MiB, 0)).toBe(UPLOAD_FLOOR_BPS); // the account is already busy: the floor
+describe('disk IO allocator', () => {
+  const MiB = 2 ** 20;
+  const d = (playback: number, upload: number, worker: number, small: number) => ({ playback: playback * MiB, upload: upload * MiB, worker: worker * MiB, small: small * MiB });
+
+  it('guarantees each busy class its share and lends the rest by priority (playback, uploads, worker, small)', async () => {
+    const { allocate, LINE_BPS } = await import('../src/media/throttle.ts');
+    const at = (demand: ReturnType<typeof d>, others = 0) => Object.values(allocate(LINE_BPS - others * MiB, demand)).map((v) => Math.round((v / MiB) * 100) / 100);
+    expect(at(d(0, 25, 0, 0))).toEqual([0, 21, 0, 0]); // only uploads: the whole line
+    expect(at(d(12, 20, 0, 0))).toEqual([12, 9, 0, 0]);
+    expect(at(d(12, 20, 10, 0))).toEqual([8, 5, 8, 0]);
+    expect(at(d(3, 20, 10, 0))).toEqual([3, 10, 8, 0]);
+    expect(at(d(12, 20, 10, 6))).toEqual([5, 5, 8, 3]); // everything saturated: exactly the shares
+    expect(at(d(2, 20, 4, 1))).toEqual([2, 14, 4, 1]); // light classes keep what they ask for
+    expect(at(d(12, 20, 10, 6), 6)).toEqual([3.57, 3.57, 5.71, 2.14]); // other sites use 6: the shares scale by 15/21
+    expect(at(d(1, 20, 0, 0), 6)).toEqual([1, 14, 0, 0]); // ...but only once the lendable pool is gone
+    expect(at(d(0, Infinity, 0, 0))).toEqual([0, 21, 0, 0]); // a class held by its budget wants all it can get
+  });
+
+  it('gives a large response priority over an upload when both want more than the line', async () => {
+    const { Readable } = await import('node:stream');
+    const { ioRates, LINE_BPS, paced, servedAs, SHARES, takeUpload } = await import('../src/media/throttle.ts');
+    let on = true;
+    async function* fast() {
+      while (on) yield Buffer.alloc(256 * 1024);
+    }
+    const drain = async (r: AsyncIterable<unknown>) => {
+      let n = 0;
+      for await (const c of r) n += (c as Buffer).length;
+      return n;
+    };
+    const big = drain(servedAs(Readable.from(fast()), 500 * MiB));
+    const up = drain(paced(fast(), takeUpload));
+    await new Promise((r) => setTimeout(r, 2300)); // two allocator passes
+    const r = ioRates();
+    on = false;
+    await Promise.all([big, up]);
+    expect(r.upload).toBeGreaterThanOrEqual(SHARES.upload * 0.7);
+    expect(r.playback).toBeGreaterThan(r.upload);
+    if (process.platform !== 'linux') expect([r.playback, r.upload]).toEqual([LINE_BPS - SHARES.upload, SHARES.upload]); // nothing else measured off Linux
   });
 });

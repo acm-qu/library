@@ -27,3 +27,27 @@ describe('upload scheduling', () => {
     expect(toStart([item('a.mov', 'uploading'), item('b.mov')])).toEqual([]);
   });
 });
+
+describe('server upload queue', () => {
+  it('holds a new file as queued with its place in line, and hands it to the scheduler once granted', async () => {
+    const { currentUploads, uploader } = await import('../src/lib/uploader.ts');
+    const items = () => currentUploads()[0];
+    const ticketId = '01900000-0000-7000-8000-000000000001';
+    const calls: string[] = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      return new Response(JSON.stringify({ id: ticketId, state: 'waiting', position: 3 }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    const file = { name: 'IMG_1.JPG', type: 'image/jpeg', size: 1000, lastModified: 1 } as File;
+    uploader.add([{ file, tier: 'member' }], '01900000-0000-7000-8000-0000000000ee');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toEqual(['POST /api/uploads/tickets']);
+    expect(items()).toMatchObject({ status: 'queued', ticketId, position: 3 });
+
+    const row = { state: 'waiting' as const, position: 2, uploader: 'Me', kind: 'photo' as const, bytes: 1000, progress: null, createdAt: new Date().toISOString(), ticketId, filename: 'IMG_1.JPG' };
+    uploader.sync({ slots: 4, inUse: 4, rateBps: 0, items: [row] });
+    expect(items()).toMatchObject({ status: 'queued', position: 2 });
+    uploader.sync({ slots: 4, inUse: 1, rateBps: 0, items: [{ ...row, state: 'uploading', position: 1, progress: 0 }] });
+    expect(items()).toMatchObject({ status: 'waiting', ticketId }); // granted: the 2-at-a-time rule starts it (navigator.onLine is unset in node)
+  });
+});

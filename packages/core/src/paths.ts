@@ -4,6 +4,7 @@
 //   assets/<shard>/<id>/r<rev>/... renditions of one processing revision
 //   assets/<shard>/<id>/r<rev>/frames/<n>.webp[.enc]  frames sampled for tone-curve scoring (HDR video, auto)
 //   tmp/<jobId>/                   worker scratch, removed after each job
+//   io-alloc.json                  the worker's live disk-IO allocation, written by the API (media/throttle.ts)
 import path from 'node:path';
 
 /** Two hex characters from the random tail of the UUID v7 (the head is a timestamp and would cluster). */
@@ -14,6 +15,7 @@ export const originalPath = (mediaRoot: string, id: string, ext: string, encrypt
   path.join(assetDir(mediaRoot, id), `original.${ext}${encrypted ? '.enc' : ''}`);
 export const revDir = (mediaRoot: string, id: string, rev: number) => path.join(assetDir(mediaRoot, id), `r${rev}`);
 export const tusDir = (mediaRoot: string) => path.join(mediaRoot, 'tus');
+export const ioAllocPath = (mediaRoot: string) => path.join(mediaRoot, 'io-alloc.json');
 export const tmpDir = (mediaRoot: string, jobId: string) => path.join(mediaRoot, 'tmp', jobId);
 
 /** One tone-curve table under LUTS_DIR, as written by `python -m mediaworker luts`. */

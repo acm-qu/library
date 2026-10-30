@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { assets, events, jobs, renditions } from '@acm/core/db';
+import { assets, events, jobs, renditions, uploadTickets } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { assetDir, originalPath } from '@acm/core/paths';
 import { eq } from 'drizzle-orm';
@@ -195,8 +195,10 @@ describe('cleanup', () => {
     await writeFile(path.join(tus, 'abc123'), 'x');
     await writeFile(path.join(tus, 'abc123.json'), '{}');
     await createSession(db, uploader, { ip: null, userAgent: null }, new Date(Date.now() - 31 * 86400_000));
+    // A queue ticket whose browser stopped polling while nobody else touched the queue.
+    await db.insert(uploadTickets).values({ id: newId(), uploaderId: uploader, eventId, kind: 'image', bytes: 1, filename: 'c.jpg', lastSeenAt: new Date(Date.now() - 5 * 60_000) });
     const r = await cleanup(ctx);
-    expect(r).toMatchObject({ abandoned: 1, sessions: 1 });
+    expect(r).toMatchObject({ abandoned: 1, sessions: 1, tickets: 1 });
     expect(existsSync(path.join(tus, 'abc123'))).toBe(false);
     expect((await db.select().from(assets)).map((a) => a.id)).toEqual([fresh]);
   });

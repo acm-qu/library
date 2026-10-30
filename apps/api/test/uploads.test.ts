@@ -3,10 +3,10 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { appSettings, assets, events, jobs } from '@acm/core/db';
+import { appSettings, assets, events, jobs, uploadTickets } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { originalPath } from '@acm/core/paths';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createSession } from '../src/auth/sessions.ts';
 import { parseFfprobe, probeImage, probeVideo } from '../src/uploads/probe.ts';
@@ -59,11 +59,24 @@ async function http(method: string, url: string, headers: Record<string, string>
   return { statusCode: r.status, headers: Object.fromEntries(r.headers), body: text, json: () => JSON.parse(text) };
 }
 const tusHeaders = (sid = core.sid) => ({ ...H, 'tus-resumable': '1.0.0', cookie: `sid=${sid}` });
-async function create(bytes: number, meta: Record<string, string>, sid?: string) {
-  return http('POST', '/api/uploads', { ...tusHeaders(sid), 'upload-length': String(bytes), 'upload-metadata': Object.entries(meta).map(([k, v]) => `${k} ${b64(v)}`).join(',') });
+/** A place in the upload queue (granted at once while slots are free). */
+async function ticket(sid = core.sid, body: Record<string, unknown> = {}) {
+  const r = await t.app.inject({ method: 'POST', url: '/api/uploads/tickets', headers: H, cookies: { sid }, payload: { eventId, filename: 'f.jpg', bytes: 10, kind: 'image', ...body } });
+  return { status: r.statusCode, ...(r.json() as { id: string; state: 'uploading' | 'waiting'; position: number }) };
+}
+const queue = (sid = core.sid) => t.app.inject({ method: 'GET', url: '/api/uploads/queue', cookies: { sid } }).then((r) => r.json());
+const ticketOf = new Map<string, string>(); // tus location → its ticket
+/** tus create with a fresh granted ticket (or the given one; null for none). A failed create gives its ticket back. */
+async function create(bytes: number, meta: Record<string, string>, sid?: string, tk?: string | null) {
+  const id = tk === undefined ? (await ticket(sid)).id : tk;
+  const all = id ? { ...meta, ticketId: id } : meta;
+  const r = await http('POST', '/api/uploads', { ...tusHeaders(sid), 'upload-length': String(bytes), 'upload-metadata': Object.entries(all).map(([k, v]) => `${k} ${b64(v)}`).join(',') });
+  if (r.statusCode === 201 && id) ticketOf.set(r.headers.location as string, id);
+  else if (id && tk === undefined) await t.app.inject({ method: 'DELETE', url: `/api/uploads/tickets/${id}`, headers: H, cookies: { sid: sid ?? core.sid } });
+  return r;
 }
 const patch = (location: string, offset: number, body: Buffer) =>
-  http('PATCH', location, { ...tusHeaders(), 'upload-offset': String(offset), 'content-type': 'application/offset+octet-stream' }, body);
+  http('PATCH', location, { ...tusHeaders(), 'upload-ticket': ticketOf.get(location) ?? '', 'upload-offset': String(offset), 'content-type': 'application/offset+octet-stream' }, body);
 
 async function upload(file: string, filename: string, tier = 'member', chunk = Infinity) {
   const body = await readFile(file);
@@ -182,7 +195,7 @@ describe.runIf(hasFfmpeg)('tus uploads', () => {
     expect(noCsrf.statusCode).toBe(403);
     expect((await create(10, { eventId: newId(), tier: 'member', filename: 'a.jpg' })).statusCode).toBe(404);
     expect((await create(10, { eventId, tier: 'secret', filename: 'a.jpg' })).statusCode).toBe(400);
-    const spoof = await http('POST', '/api/uploads', { ...tusHeaders(), 'x-acm-uploader': newId(), 'upload-length': '10', 'upload-metadata': `eventId ${b64(eventId)},tier ${b64('member')},filename ${b64('a.jpg')}` });
+    const spoof = await http('POST', '/api/uploads', { ...tusHeaders(), 'x-acm-uploader': newId(), 'upload-length': '10', 'upload-metadata': `eventId ${b64(eventId)},tier ${b64('member')},filename ${b64('a.jpg')},ticketId ${b64((await ticket()).id)}` });
     expect(spoof.statusCode).toBe(201);
     expect((await db.select().from(assets))[0]).toMatchObject({ uploaderId: core.id, girlsOnly: false });
     expect((await create(10, { eventId, tier: 'member', girlsOnly: 'yes', filename: 'b.jpg' })).statusCode).toBe(400);
@@ -228,5 +241,120 @@ describe.runIf(hasFfmpeg)('my uploads buckets and duplicates index', () => {
     expect((await get('?bucket=active')).items.map((i: { filename: string }) => i.filename)).not.toContain('gone.jpg');
     const existing = await t.app.inject({ method: 'GET', url: `/api/uploads/existing?eventId=${eventId}`, cookies: { sid: core.sid } });
     expect(existing.json().items.map((i: { filename: string }) => i.filename).sort()).toEqual(['a.jpg', 'b.mp4']);
+  });
+});
+
+describe('upload queue', () => {
+  let other: { id: string; sid: string };
+  beforeEach(async () => {
+    const o = await addUser('noor@qu.edu.qa', { name: 'Noor', isFemale: false });
+    other = { id: o.id, sid: (await createSession(db, o.id, { ip: null, userAgent: null })).token };
+  });
+  const finish = (loc: string) => http('DELETE', loc, tusHeaders());
+
+  it('grants four slots in arrival order, at most two per person, and the next in line when one finishes', async () => {
+    const mine = [await ticket(), await ticket(), await ticket()];
+    const theirs = [await ticket(other.sid), await ticket(other.sid)];
+    // A browser uploads two files at a time, so a third slot for one person waits while someone else gets it.
+    expect([...mine, ...theirs].map((x) => x.state)).toEqual(['uploading', 'uploading', 'waiting', 'uploading', 'uploading']);
+    expect(mine[2]).toMatchObject({ status: 200, position: 1 });
+    const q = await queue(other.sid);
+    expect(q).toMatchObject({ slots: 4, inUse: 4 });
+    expect(q.items.map((r: { state: string; position: number; uploader: string }) => [r.state, r.position, r.uploader])).toEqual([
+      ['uploading', 1, 'c'],
+      ['uploading', 2, 'c'],
+      ['uploading', 3, 'Noor'],
+      ['uploading', 4, 'Noor'],
+      ['waiting', 1, 'c'],
+    ]);
+    // A tus create needs one of the caller's own granted tickets.
+    expect((await create(10, { eventId, tier: 'member', filename: 'x.jpg' }, undefined, null)).statusCode).toBe(409);
+    expect((await create(10, { eventId, tier: 'member', filename: 'x.jpg' }, undefined, theirs[0]!.id)).json().error).toBe('no_slot');
+    expect((await create(10, { eventId, tier: 'member', filename: 'x.jpg' }, undefined, mine[2]!.id)).statusCode).toBe(409); // not granted yet
+    const c = await create(1000, { eventId, tier: 'member', filename: 'x.jpg' }, undefined, mine[0]!.id);
+    expect(c.statusCode).toBe(201);
+    expect((await db.select().from(uploadTickets).where(eq(uploadTickets.id, mine[0]!.id)))[0]?.uploadId).toBe(c.headers.location!.split('/').pop());
+    expect((await finish(c.headers.location as string)).statusCode).toBe(204);
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await db.select().from(uploadTickets).where(eq(uploadTickets.id, mine[0]!.id)))[0]?.status).toBe('cancelled');
+    expect((await queue(other.sid)).items.filter((r: { state: string }) => r.state === 'uploading')).toHaveLength(4); // the 5th moved up
+    expect((await db.select().from(uploadTickets).where(eq(uploadTickets.id, mine[2]!.id)))[0]?.status).toBe('granted');
+  });
+
+  it('refuses chunks without a live ticket', async () => {
+    const c = await create(1000, { eventId, tier: 'member', filename: 'x.jpg' });
+    const loc = c.headers.location as string;
+    expect((await patch(loc, 0, Buffer.alloc(100))).statusCode).toBe(204);
+    await db.update(uploadTickets).set({ status: 'expired' });
+    const r = await patch(loc, 100, Buffer.alloc(100));
+    expect([r.statusCode, r.json().error]).toEqual([409, 'no_slot']);
+    // A fresh ticket resumes the same upload (as after a pause) and is linked to it.
+    const again = await ticket();
+    ticketOf.set(loc, again.id);
+    expect((await patch(loc, 100, Buffer.alloc(100))).statusCode).toBe(204);
+    expect((await db.select().from(uploadTickets).where(eq(uploadTickets.id, again.id)))[0]?.uploadId).toBe(loc.split('/').pop());
+  });
+
+  it('expires granted tickets idle for 2 minutes and waiting ones not polled for 60 s, freeing their slots', async () => {
+    const ts = [];
+    for (let i = 0; i < 6; i++) ts.push(await ticket(i === 4 ? other.sid : core.sid));
+    const age = (id: string, s: number) => db.update(uploadTickets).set({ lastSeenAt: sql`now() - ${s} * interval '1 second'` }).where(eq(uploadTickets.id, id));
+    await age(ts[0]!.id, 130); // granted, no chunk and no poll for over 2 minutes
+    await age(ts[1]!.id, 90); // granted, still within its 2 minutes
+    await age(ts[5]!.id, 70); // waiting, but its browser went away
+    const q = await queue(other.sid); // Noor's poll keeps her own ticket (ts[4], granted) alive
+    const status = async (id: string) => (await db.select().from(uploadTickets).where(eq(uploadTickets.id, id)))[0]?.status;
+    expect(await status(ts[0]!.id)).toBe('expired');
+    expect(await status(ts[1]!.id)).toBe('granted');
+    expect(await status(ts[2]!.id)).toBe('granted'); // the expired slot goes to the next of c's files (2 per person)
+    expect(await status(ts[4]!.id)).toBe('granted');
+    expect(await status(ts[5]!.id)).toBe('expired');
+    expect(q).toMatchObject({ inUse: 3 });
+    // The hourly cleanup runs the same expiry.
+    await age(ts[1]!.id, 130);
+    const { expireUploadTickets } = await import('@acm/core/db');
+    expect(await expireUploadTickets(db)).toBe(1);
+  });
+
+  it("shows everyone the queue without others' filenames, events, ids or girls-only flags", async () => {
+    await ticket(core.sid, { filename: 'secret-girls.jpg', girlsOnly: true, bytes: 3_000_000 });
+    await ticket(other.sid, { filename: 'noor.mov', kind: 'video', bytes: 1_200_000_000 });
+    const q = await queue(other.sid);
+    const [theirs, own] = q.items;
+    expect(theirs).toEqual({ position: 1, state: 'uploading', uploader: 'c', kind: 'photo', bytes: 3_000_000, progress: 0, createdAt: expect.any(String) });
+    expect(own).toMatchObject({ uploader: 'Noor', kind: 'video', filename: 'noor.mov', ticketId: expect.any(String) });
+    const text = JSON.stringify(q);
+    for (const leak of ['secret-girls', 'girls', eventId, core.id]) expect(text).not.toContain(leak);
+    expect((await t.app.inject({ method: 'GET', url: '/api/uploads/queue', cookies: { sid: member } })).statusCode).toBe(404);
+    expect((await t.app.inject({ method: 'GET', url: '/api/uploads/queue' })).statusCode).toBe(401);
+  });
+
+  it('validates ticket requests: core only, CSRF, a live event, sane sizes; and only the owner cancels', async () => {
+    expect((await ticket(member)).status).toBe(404);
+    expect((await t.app.inject({ method: 'POST', url: '/api/uploads/tickets', cookies: { sid: core.sid }, payload: { eventId, filename: 'a', bytes: 1, kind: 'image' } })).statusCode).toBe(403);
+    expect((await ticket(core.sid, { eventId: newId() })).status).toBe(404);
+    expect((await ticket(core.sid, { kind: 'pdf' })).status).toBe(400);
+    expect((await ticket(core.sid, { bytes: -1 })).status).toBe(400);
+    expect((await ticket(core.sid, { bytes: 10 * 2 ** 40 })).status).toBe(413);
+    const mine = await ticket();
+    const cancel = (id: string, sid: string) => t.app.inject({ method: 'DELETE', url: `/api/uploads/tickets/${id}`, headers: H, cookies: { sid } });
+    expect((await cancel(mine.id, other.sid)).statusCode).toBe(404);
+    expect((await cancel(mine.id, core.sid)).statusCode).toBe(200);
+    expect((await cancel(mine.id, core.sid)).statusCode).toBe(404);
+  });
+});
+
+describe.runIf(hasFfmpeg)('upload queue and finished uploads', () => {
+  it("hands a finished upload's slot to the uploader's next file", async () => {
+    const tks = [];
+    for (let i = 0; i < 5; i++) tks.push(await ticket());
+    expect(tks.map((x) => x.state)).toEqual(['uploading', 'uploading', 'waiting', 'waiting', 'waiting']);
+    const body = await readFile(`${fx}/photo.jpg`);
+    const c = await create(body.length, { eventId, tier: 'member', filename: 'p.jpg' }, undefined, tks[0]!.id);
+    expect((await patch(c.headers.location as string, 0, body)).statusCode).toBe(204);
+    const rows = await db.select().from(uploadTickets);
+    expect(rows.find((r) => r.id === tks[0]!.id)?.status).toBe('done');
+    expect(rows.find((r) => r.id === tks[2]!.id)?.status).toBe('granted');
+    expect(rows.find((r) => r.id === tks[4]!.id)?.status).toBe('waiting');
   });
 });

@@ -12,6 +12,7 @@ import { useUploads } from '../lib/uploader.ts';
 import { Icon, type IconName } from '../ui/Icon.tsx';
 import { Skeleton } from '../ui/Skeleton.tsx';
 import { useTabIndicator } from '../ui/useTabIndicator.ts';
+import { UploadQueuePanel } from './UploadQueue.tsx';
 
 const BUCKETS: Bucket[] = ['all', 'active', 'attention', 'ready'];
 
@@ -59,6 +60,8 @@ export function MyUploadsScreen() {
           </span>
         )}
       </div>
+
+      <UploadQueuePanel />
 
       <div ref={tabs} className="tabs" role="tablist" aria-label={t('myUploads.filter')}>
         {BUCKETS.map((b) => (

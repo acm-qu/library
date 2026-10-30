@@ -129,6 +129,7 @@
     "too_many_attempts": "Too many attempts. Request a new code to continue.",
     "not_allowed": "You can't do that.",
     "conflict": "That changed while you were looking. Reload and try again.",
+    "no_slot": "Every upload slot is taken. Your file waits in the upload queue.",
     "unsupported_type": "That file type isn't supported.",
     "too_large": "That file is too large.",
     "internal": "Something went wrong on our side.",
@@ -239,6 +240,7 @@
     "leaveHint": "You can leave this page. If uploads stop, pick the same files again and they continue where they left off.",
     "files": "Files",
     "st_waiting": "Waiting",
+    "st_queued": "{n, select, 0 {Queued} other {Queued · #{n} in line}}",
     "st_uploading": "Uploading {pct}%",
     "st_paused": "Paused",
     "st_done": "Uploaded",
@@ -306,6 +308,21 @@
     "waitingProcessor": "Waiting for the processor",
     "processingTitle": "Your uploads still processing",
     "more": "Show more"
+  },
+  "queue": {
+    "title": "Upload queue",
+    "help": "Up to {slots} files upload at once across the whole team; the rest wait their turn here.",
+    "slots": "{inUse} of {slots} slots in use",
+    "rate": "{rate}/s shared",
+    "empty": "Nobody is uploading right now.",
+    "error": "The upload queue couldn't be loaded.",
+    "you": "You",
+    "photo": "photo",
+    "video": "video",
+    "uploading": "uploading {pct}%",
+    "uploadingNoPct": "uploading",
+    "waiting": "waiting #{n}",
+    "more": "{n, plural, one {# more file in the queue} other {# more files in the queue}}"
   },
   "uploadErrors": {
     "decode_failed": "The file looks incomplete. Upload it again from the original device, then retry.",

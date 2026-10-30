@@ -16,6 +16,8 @@ export const LIMITS = {
   verifyIp: { max: 20, timeWindow: 15 * MINUTE },
   requestAccessIp: { max: 5, timeWindow: HOUR },
   requestAccessEmailDay: { max: 3, timeWindow: DAY },
+  // One per file picked, plus re-queues; a 500-photo batch fits with room to spare.
+  uploadTickets: { max: 1500, timeWindow: 10 * MINUTE },
 } as const;
 
 export function makeLimiter(app: FastifyInstance, name: keyof typeof LIMITS, key: (req: FastifyRequest) => string) {

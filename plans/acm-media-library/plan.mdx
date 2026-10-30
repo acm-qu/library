@@ -454,6 +454,18 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
       { name: "step · progress · est_seconds", type: "text · real · int" },
       { name: "last_error", type: "text", nullable: true }
     ]},
+    { id: "upload_tickets", name: "upload_tickets", fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "uploader_id", type: "uuid (on delete cascade)", fk: "users.id" },
+      { name: "event_id", type: "uuid", fk: "events.id" },
+      { name: "kind", type: "text check image|video" },
+      { name: "bytes", type: "bigint" },
+      { name: "filename", type: "text · private: only ever returned to its uploader" },
+      { name: "girls_only", type: "bool default false" },
+      { name: "status", type: "text check waiting|granted|done|cancelled|expired, default waiting" },
+      { name: "upload_id", type: "text (tus id once started)", nullable: true },
+      { name: "created_at · granted_at · last_seen_at", type: "timestamptz" }
+    ]},
     { id: "asset_keys", name: "asset_keys", fields: [
       { name: "asset_id", type: "uuid", pk: true, fk: "assets.id" },
       { name: "file_key_wrapped", type: "bytea · secretbox(MASTER_KEY)" },
@@ -481,6 +493,8 @@ The table set follows the backend handoff, adjusted for 9.6: `text` with `CHECK`
     { from: "assets", to: "processing_runs", kind: "1-n" },
     { from: "assets", to: "jobs", kind: "1-n" },
     { from: "asset_keys", to: "assets", kind: "1-1" },
+    { from: "users", to: "upload_tickets", kind: "1-n" },
+    { from: "events", to: "upload_tickets", kind: "1-n" },
     { from: "users", to: "audit_log", kind: "1-n" },
     { from: "users", to: "access_requests", kind: "1-n" }
   ]}
@@ -490,6 +504,7 @@ Indexes that matter for the hot paths:
 - `assets (event_id, tier, status) WHERE deleted_at IS NULL` serves event grids.
 - `assets (event_id, original_sha256)` serves duplicate detection.
 - `jobs (state, priority DESC, created_at)` serves the job claim.
+- `upload_tickets (status, created_at)` serves the upload queue (grants are first come, first served).
 - `otp_codes (email, created_at DESC)` serves verification.
 - `events` gets a GIN index on the FTS expression for search, and `(starts_on DESC, id)` for cursor pagination.
 - Event grids sort by `coalesce(captured_at, created_at), id`, with a matching expression index. That key doubles as the cursor, because `captured_at` is often missing.
@@ -625,20 +640,26 @@ Sessions slide: each authenticated request refreshes `expires_at` at most once a
   participant T as API /api/uploads (tus)
   participant F as ~/media/tus
   participant D as Postgres
-  U->>T: POST (Upload-Length, metadata eventId, tier, girlsOnly, filename, filetype)
+  U->>T: POST /api/uploads/tickets {eventId, filename, bytes, kind, girlsOnly}
+  T->>D: insert upload_tickets (waiting) · grant pass: oldest waiting while fewer than 4 granted
+  T-->>U: {id, state: uploading | waiting, position}
+  loop every 5 s while the tab holds unstarted tickets
+    U->>T: GET /api/uploads/queue (keeps them alive; a grant makes the file start)
+  end
+  U->>T: POST (Upload-Length, metadata eventId, tier, girlsOnly, filename, filetype, ticketId)
   T->>T: onIncomingRequest: requireCore, event exists, tier allowed, size ≤ 20 GiB, an existing id must be the caller's (else 404)
   T->>F: create <id> + <id>.json
-  T->>D: onUploadCreate: insert asset (uploading, upload_id = <id>)
+  T->>D: onUploadCreate: the caller's granted ticket (else 409 no_slot) gets upload_id = <id> · insert asset (uploading, upload_id = <id>)
   T-->>U: 201 Location /api/uploads/<id>
   loop 8 MiB chunks
-    U->>T: PATCH Upload-Offset n (X-Requested-With: acm-media)
+    U->>T: PATCH Upload-Offset n (X-Requested-With: acm-media, Upload-Ticket: <ticket>; no live ticket → 409 no_slot)
     T->>F: append
     T-->>U: 204 Upload-Offset n+8 MiB
   end
   Note over U,T: tab closed or offline → on return HEAD gives the offset, PATCH continues
   T->>T: onUploadFinish: sniff first 4 KB (magic bytes) · ffprobe or image header (≤ 15 s, nice, 1 thread)
   T->>F: rename to assets/ab/<asset>/original.<ext>, delete tus files
-  T->>D: asset → queued with duration, hdr, width, height · process job, one transaction
+  T->>D: asset → queued with duration, hdr, width, height · process job, one transaction · ticket done, next one granted
   T->>T: wakeWorker: spawn WORKER_WAKE (flock -w 20) in its own process group
   T-->>U: final 204 + header Asset-Id
   U->>U: done screen with ETA from GET /api/uploads/mine (or waiting to start / stalled)
@@ -660,6 +681,10 @@ SHA-256 is the worker's first step for every job. A match within the same event 
 **Girls only.** The add-files step has one "Girls only" checkbox for the whole batch ("Only female core members and admins can see these"). It goes out as tus metadata `girlsOnly` = `true` or `false` on every file, and `onUploadCreate` stores it in `assets.girls_only` (absent means false). Tiles, My uploads rows and the viewer's info panel show a "Girls only" marker to the people who can see the item; Admin › Item has a toggle that PATCHes `girlsOnly` and is audited as `asset.girls_only`.
 
 **Two uploads at a time, at most one video.** The host's disk IO is capped at 30 MB/s, so the client starts up to two files in parallel and never two videos at once.
+
+**A server-wide queue of 4 slots.** At most 4 files upload at once across all users, and at most 2 per person (`SLOTS_PER_USER`, because a browser uploads 2 files at a time, so a 3rd slot would sit idle while others wait); they share the live upload rate (see the IO pool below), and every other file waits first come, first served in `upload_tickets`. A file takes a ticket before its tus POST and shows "Queued · #N in line" until granted; the browser's two-at-a-time rule still applies on top, and a granted ticket it can't start yet keeps its slot only while it keeps polling. Grants happen on every queue read and every ticket create, finish or cancel, one pass at a time under a Postgres advisory transaction lock, so two requests can't over-grant. Tickets expire so slots never leak: granted with no chunk and no poll for 2 minutes, or waiting with no poll for 60 seconds; the hourly cleanup runs the same expiry. Pausing gives the ticket back; resuming queues the file again and continues from the server's offset, the new ticket linked by its first PATCH. The Upload screen (step 3) and My uploads show an **Upload queue** panel to every core member: uploader name, photo or video, size, "uploading 45%" or "waiting #4", and "4 of 4 slots in use". Filenames show only on the viewer's own rows; events, asset ids and girls-only flags never appear.
+
+**One disk-IO pool for everything.** Large media (playback and downloads), uploads, the worker and small files share the library's 21 MiB/s line (70% of the account's 30 MB/s) in that priority order, each guaranteed 5 / 5 / 8 / 3 MiB/s under contention and lending what it doesn't use to the others by priority. The details and the allocation table are Step 12 of `plans/hosting-limits/plan.mdx`.
 
 ### Worker runner
 
@@ -949,7 +974,9 @@ All routes live under `/api`. Errors are `{error, message}`, and pagination uses
     ["GET / PATCH / DELETE", "/assets/:id", "anyone · core own or admin · admin", "Viewer, Player, Item details"],
     ["GET", "/media/:id/thumb|view|poster|original", "canView (member tier public)", "Grids, Viewer, Download original"],
     ["GET", "/media/:id/hls/master.m3u8 · :variant/index.m3u8 · :variant/data.ts · hls/key", "canView (member tier public)", "Player"],
-    ["ALL", "/uploads/* (tus)", "core", "Upload"],
+    ["ALL", "/uploads/* (tus)", "core; POST needs a granted ticket in metadata, PATCH in Upload-Ticket (else 409 no_slot)", "Upload"],
+    ["POST · DELETE", "/uploads/tickets · /uploads/tickets/:id", "core (own; create is rate-limited)", "Upload (one ticket per file; cancel or pause gives it back)"],
+    ["GET", "/uploads/queue", "core", "Upload queue panel (Upload step 3, My uploads); polled every 5 s while the tab holds unstarted tickets"],
     ["GET", "/uploads/mine?cursor=", "core", "My uploads, resume banner, shell processing indicator"],
     ["POST", "/uploads/:assetId/retry", "core (own)", "My uploads (Retry)"],
     ["GET / POST", "/admin/users · /admin/users/bulk", "admin", "Admin · Members"],
@@ -1105,8 +1132,8 @@ The canvas's `project/app.css` already defines every token and the base componen
     ["Event · PhoneEvent", "/events/:slug", "EventScreen + JustifiedGrid", "useEvent, useEventAssets, usePatchEvent → /events/:idOrSlug, /events/:id/assets, /events/:id", "No cover banner (back link, then the header); select mode with per-file downloads; tier filter for core; Edit event (core), Delete (admin); skeleton row while the next page loads"],
     ["Viewer · PhoneViewer", "/p/:assetId", "Lightbox (image) over its event", "useAsset → /assets/:id; img src /media/:id/view", "Always dark; ← → I Z Esc; thumbnail first, then the view copy; one Download original button; Use as event cover (core)"],
     ["Player", "/p/:assetId", "Lightbox (video) + Player over its event", "useAsset; hls.js → /media/:id/hls/*", "Space F M keys; Auto shows the current level; only existing rungs"],
-    ["Upload · PhoneUpload", "/upload", "UploadScreen (ChooseEvent, AddFiles, Progress, Done)", "useCreateEvent; Uppy tus → /uploads", "Resume banner; offline auto-resume; duplicate flag; HDR-off tip"],
-    ["MyUploads · PhoneMyUploads", "/uploads", "MyUploadsScreen", "useMyUploads (polling) → /uploads/mine", "Grouped by event; plain-language errors; Retry"],
+    ["Upload · PhoneUpload", "/upload", "UploadScreen (ChooseEvent, AddFiles, Progress + UploadQueuePanel, Done)", "useCreateEvent; uploader → /uploads/tickets, tus → /uploads; useUploadQueue → /uploads/queue", "Resume banner; offline auto-resume; duplicate flag; HDR-off tip; Queued · #N in line"],
+    ["MyUploads · PhoneMyUploads", "/uploads", "MyUploadsScreen + UploadQueuePanel", "useMyUploads (polling) → /uploads/mine; useUploadQueue → /uploads/queue", "Grouped by event; plain-language errors; Retry; the team's upload queue"],
     ["AdminQueue (Processing)", "/admin/queue", "QueueScreen", "useJobs(state) → /admin/jobs; useCompute → /admin/compute", "Health summary; live threads/CPU/disk against the host limits; Move to the top; Needs review actions; purge jobs and deleted items hidden. The admin side nav groups Members and Events under Admin, Processing and Storage under Compute"],
     ["AdminItem", "/admin/items/:assetId", "ItemDetailsScreen", "useProcessing → /admin/assets/:id/processing, /frames/:n", "Scores table, 8 frames on a timeline, override + re-process with ETA confirm"],
     ["AdminMembers", "/admin/members", "MembersScreen (Members · Requests tabs)", "useUsers, useBulkAdd, useAccessRequests → /admin/users*, /admin/access-requests*", "Roles shown as Admin / Core (Super admin badge; Admin switch and choice disabled for non-super admins); Gender column; Core or Admin and optional gender when adding one; bulk paste with a Download .xlsx template button; Requests tab with a pending count, Approve / Reject (confirm), skeleton and empty state; in-page confirms; last-admin guard"],
