@@ -602,6 +602,30 @@ After ingest queues the job, the API calls `wakeWorker` (`apps/api/src/lib/wake.
 
 </Callout>
 
+### Step 12: a hard budget for every step of uploading and playing videos (done, 201e416)
+
+The account's limits are shared by every site on it, so each step gets a fixed share instead of relying on the steps never overlapping. With the caps below, the worst case where everything runs at once still stays under each limit:
+
+<Table
+  id="budget"
+  columns={["Step", "CPU (limit 400%)", "Disk IO (limit 30 MB/s)", "How it is enforced"]}
+  rows={[
+    ["Upload (per file, 2 files at a time, at most 1 video)", "API, light", "≤ 5 MB/s per file, ≤ 10 MB/s total", "apps/web/src/lib/uploader.ts: one 8 MiB chunk per 1.6 s (chunkPacer)"],
+    ["Hash, seal, unseal the original", "worker, light", "≤ 10 MB/s", "apps/worker/src/lib/pace.ts (pacer) in hash.ts and seal.ts; packages/core/src/crypto/aeadFile.ts takes an optional pace hook"],
+    ["Encode (HLS ladder) and keyframe scan", "≤ 300% (pinned to 3 cores)", "source read ≤ 8 MB/s, writes ≈ 1.25 MB/s per minute of video", "taskset -c 0-2 in apps/worker/src/lib/spawn.ts; ffmpeg -readrate from sourceReadrate() and frames.readrate()"],
+    ["Playback (HLS segments) and original downloads", "API, light", "≤ 8 MB/s for all viewers together", "apps/api/src/media/throttle.ts: responses over 1 MiB share one budget; thumbs, posters and playlists are not slowed"],
+    ["Deploy copy", "local", "≤ 8 MB/s", "rsync --bwlimit=8000 in scripts/deploy.sh"],
+  ]}
+/>
+
+```latex
+\text{IO}_{\max} = \underbrace{10}_{\text{uploads}} + \underbrace{10}_{\text{hash/seal}} + \underbrace{8}_{\text{serving}} = 28\ \text{MB/s} < 30\ \text{MB/s}
+\qquad
+\text{CPU}_{\max} \approx \underbrace{300\%}_{\text{worker}} + \underbrace{<100\%}_{\text{API}} < 400\%
+```
+
+The hash/seal step and the encode never run at the same time (the worker does one step after another), so the worker's share is the larger of the two, 10 MB/s. Processes stay around 60 of 200 (no step adds processes per user). Costs: hashing a 150 MB video takes about 15 s instead of 2; an encode of a source above 8 MB/s (for example 4K at 100 Mb/s) runs no faster than 0.67× real time; one 1080p stream needs about 0.75 MB/s, so about 10 people can start videos at the same moment before playback waits on the 8 MB/s budget (repeat views come from memory and cost nothing). The upload pacing runs in the browser, so a modified client could ignore it.
+
 ## 6. Verification
 
 <Checklist
