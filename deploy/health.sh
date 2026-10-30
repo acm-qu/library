@@ -7,7 +7,7 @@ url=https://library.qu.acm.org/api/health
 if body=$(curl -fsS --max-time 15 "$url"); then
   [ -f "$state" ] && [ "$(cat "$state")" -ge 3 ] && echo "Recovered: $body" | mail -s "ACM Media is back up" tech@qu.acm.org
   echo 0 > "$state"
-  # A worker that hasn't ticked for 10 minutes (it beats every minute, also during long jobs): mail once until it's back.
+  # A worker that hasn't ticked for 10 minutes (cron starts it every 2 minutes and it beats during long jobs): mail once until it's back.
   tick=$(sed -n 's/.*"workerTick":"\([^"]*\)".*/\1/p' <<<"$body")
   if [ -n "$tick" ] && [ $(( $(date +%s) - $(date -d "$tick" +%s) )) -gt 600 ]; then
     echo "$(date -Is) worker stalled since $tick"

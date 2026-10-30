@@ -22,7 +22,7 @@ something goes wrong. Security details are in `docs/security.md`.
 `shared/.env` holds `NODE_ENV=production`, `PUBLIC_ORIGIN=https://library.qu.acm.org`, `DATABASE_URL`, `MASTER_KEY`,
 `OTP_PEPPER`, `MAIL_TRANSPORT=smtp` with the `SMTP_*` values, `MEDIA_ROOT=/home/quhosting/media`,
 `KEYS_DIR=/home/quhosting/keys`, `FFMPEG`/`FFPROBE=/home/quhosting/bin/…`, `PYTHON=/home/quhosting/venvs/worker/bin/python`,
-`LUTS_DIR`, `LOG_FILE=/home/quhosting/logs/acm-api.log` (lsnode drops the API's stdout), and `PRELAUNCH_ALLOWLIST` until
+`LUTS_DIR`, `LOG_FILE=/home/quhosting/logs/acm-api.log` (lsnode drops the API's stdout), `WORKER_WAKE` (the crontab's worker command with `flock -w 20` instead of `-n`), and `PRELAUNCH_ALLOWLIST` until
 launch (it only limits who can sign in; member-tier items are public either way).
 
 ## Deploy
@@ -42,7 +42,7 @@ scripts/deploy.sh --rollback <sha>
 ## Cron
 
 Install `deploy/crontab.template` with `crontab`. Or add each line in cPanel's Cron Jobs page, which edits the same crontab (`cpapi2 Cron` does not work over SSH here because of CageFS). It runs:
-- the worker every minute (under `flock`, so only one runs at a time);
+- the worker every 2 minutes (under `flock`, so only one runs at a time); a finished upload also starts it straight away through `WORKER_WAKE`;
 - cleanup hourly;
 - storage stats and the database backup nightly;
 - a health check every 10 minutes, which mails tech@qu.acm.org after 3 failures in a row.

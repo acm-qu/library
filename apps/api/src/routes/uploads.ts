@@ -16,6 +16,7 @@ import { decodeCursor, encodeCursor } from '../lib/cursor.ts';
 import { HttpError, notFound } from '../lib/errors.ts';
 import { activeJobs, byAsset } from '../lib/queue.ts';
 import { ingest, UnsupportedType } from '../uploads/ingest.ts';
+import { wakeWorker } from '../lib/wake.ts';
 
 /** Set by Fastify after auth and overwritten on every request, so a client can never supply it. */
 const USER_HEADER = 'x-acm-uploader';
@@ -69,6 +70,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
     async onUploadFinish(_req, upload) {
       try {
         const a = await ingest(db, { mediaRoot: cfg.MEDIA_ROOT, ffprobe: cfg.FFPROBE }, upload.id, upload.storage?.path ?? path.join(tusDir(cfg.MEDIA_ROOT), upload.id));
+        wakeWorker(cfg.WORKER_WAKE);
         return { headers: { 'Asset-Id': a.id } };
       } catch (e) {
         if (e instanceof UnsupportedType) throw tusError(415, 'unsupported_type', "That file type isn't supported.");

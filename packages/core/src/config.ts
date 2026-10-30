@@ -40,6 +40,8 @@ export const ServerConfig = z
     WEB_ROOT: z.string().optional(),
     /** API log file. Set in production: LiteSpeed's lsnode drops the app's stdout. */
     LOG_FILE: z.string().optional(),
+    /** Shell command that starts one worker pass (the crontab's, with `flock -w 20` so it waits out a worker that's exiting). Unset: cron only. */
+    WORKER_WAKE: z.string().optional(),
     UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(20 * 2 ** 30),
     UPLOAD_CHUNK_BYTES: z.coerce.number().int().positive().default(8 * 2 ** 20),
     PRELAUNCH_ALLOWLIST: emailList,

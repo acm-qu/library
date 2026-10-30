@@ -16,7 +16,7 @@ export async function loadRho(db: Db): Promise<Rho> {
 export type ActiveJob = { jobId: string; assetId: string | null; kind: string; state: string; step: string | null; progress: number | null; readyInS: number | null };
 
 /** The worker beats every minute (and during long jobs); older than this, nothing is being processed. */
-export const STALE_TICK_MS = 3 * 60_000;
+export const STALE_TICK_MS = 5 * 60_000; // cron starts the worker every 2 min
 
 async function workerAlive(db: Db): Promise<boolean> {
   const [row] = await db.select().from(appSettings).where(eq(appSettings.key, 'worker_tick'));
