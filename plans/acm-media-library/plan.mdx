@@ -513,6 +513,7 @@ Delete behaviour and per-viewer fields:
 - **Foreign keys.** `events.cover_asset_id`, `assets.duplicate_of` and `jobs.asset_id` are `ON DELETE SET NULL`, so a purge job can delete its asset row without cascading into its own job row. `renditions`, `processing_runs` and `asset_keys` cascade.
 - **Event covers.** A cover is resolved per viewer. If the chosen cover isn't visible to this viewer (core tier, or unfinished), the first visible photo is used instead, and `coverAssetId` is returned only when the viewer can see it, so a hidden core cover never reveals that the item exists. The web app no longer picks covers or shows a cover banner on the event page: Library cards show the automatic cover (`coverUrl`), and the API's cover logic and column are unchanged.
 - **Core-content marker.** `GET /events` returns `hasCoreContent` only to core viewers, for the design's core-only marker.
+- **Core-only events.** An event whose `default_tier` is `core` is hidden from members and signed-out visitors (404), and everything in it is core: uploads to it and items moved into it are stored as core whatever the client sends, the upload screen shows no per-file tier there, and saving the event as core raises any public items still in it (each gets the usual `retier` job, or `reprocess` for a ready video). Until that save, `loadAsset` already treats such items as core, so a direct link 404s too.
 
 
 
@@ -678,7 +679,7 @@ SHA-256 is the worker's first step for every job. A match within the same event 
 
 **Resume on phones.** Re-picking from the iOS photo library can change a file's name and `lastModified`, which defeats Uppy's fingerprint. So the resume banner matches re-picked files to the event's `uploading` rows by original filename and size, and continues with that row's tus id. The file input's `accept` lists `image/heic` and `video/quicktime`, so iOS sends originals instead of transcoding them. Milestone 4 checks this on a real iPhone: originals must arrive byte-identical, and HLG must survive.
 
-**Girls only.** The add-files step has one "Girls only" checkbox for the whole batch ("Only female core members and admins can see these"). It goes out as tus metadata `girlsOnly` = `true` or `false` on every file, and `onUploadCreate` stores it in `assets.girls_only` (absent means false). Tiles, My uploads rows and the viewer's info panel show a "Girls only" marker to the people who can see the item; Admin › Item has a toggle that PATCHes `girlsOnly` and is audited as `asset.girls_only`.
+**Girls only.** Each file in the add-files step has its own "Girls only" checkbox (help line: only female core members and admins can see that file). It goes out as tus metadata `girlsOnly` = `true` or `false` per file, and `onUploadCreate` stores it in `assets.girls_only` (absent means false). Tiles, My uploads rows and the viewer's info panel show a "Girls only" marker to the people who can see the item; Admin › Item has a toggle that PATCHes `girlsOnly` and is audited as `asset.girls_only`.
 
 **Two uploads at a time, at most one video.** The host's disk IO is capped at 30 MB/s, so the client starts up to two files in parallel and never two videos at once.
 
@@ -1282,8 +1283,8 @@ Each milestone ends with passing tests and a demo on a local stack. From Milesto
     ["First admin", "tech@qu.acm.org, created by scripts/bootstrap-admin.ts"],
     ["Who makes admins", "Only a super admin: an active admin listed in SUPERADMINS (tech@qu.acm.org). Other admins get 403 not_allowed for admin changes and for any edit of a super admin's account; super admins can't be demoted or disabled through the API. Approvals stay open to every admin and create core accounts"],
     ["Upload client", "tus-js-client directly (the library Uppy's tus plugin wraps) behind the design's own upload screens; Uppy's dashboard UI isn't used, so it is left out"],
-    ["Girls only", "A batch checkbox on the Upload screen (sent as tus metadata girlsOnly for every file) and a toggle in Admin › Item through PATCH /api/assets/:id. Only female core members and admins see these items; male admins get 404 and a queue row without details. The tier still controls encryption"],
-    ["Event visibility for signed-out visitors", "Signed-out visitors see an event only when it holds something they can see; core members see every event, including empty ones to upload into"],
+    ["Girls only", "A checkbox on each file on the Upload screen (sent as tus metadata girlsOnly per file) and a toggle in Admin › Item through PATCH /api/assets/:id. Only female core members and admins see these items; male admins get 404 and a queue row without details. The tier still controls encryption"],
+    ["Event visibility for signed-out visitors", "Signed-out visitors see an event only when it is public and holds something they can see; a core-only event and everything in it is core. Core members see every event, including empty ones to upload into"],
     ["React Router", "v7: v8 requires React 19, and the handoff fixes React 18"],
     ["Local dev ports", "API 3080 and Vite 5180 (strict), because 3000 and 5173 are commonly taken"],
   ]}
