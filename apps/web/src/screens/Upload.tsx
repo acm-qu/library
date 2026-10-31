@@ -16,7 +16,7 @@ import { Icon } from '../ui/Icon.tsx';
 import { Rich } from '../ui/Rich.tsx';
 
 const ACCEPT = 'image/jpeg,image/png,image/heic,image/heif,image/avif,image/webp,video/mp4,video/quicktime,.heic,.heif,.mov';
-type Picked = { file: File; tier: Tier; dup: boolean; key: string };
+type Picked = { file: File; tier: Tier; girlsOnly: boolean; dup: boolean; key: string };
 
 export function UploadScreen() {
   const { t } = useTranslation();
@@ -173,7 +173,6 @@ function ChooseEvent({ initial, onPick }: { initial?: string; onPick: (id: strin
 function AddFiles({ event, onBack, onStart }: { event: { id: string; title: string; slug: string; defaultTier: Tier }; onBack: () => void; onStart: () => void }) {
   const { t } = useTranslation();
   const [picked, setPicked] = useState<Picked[]>([]);
-  const [girlsOnly, setGirlsOnly] = useState(false);
   const [over, setOver] = useState(false);
   const [tip, setTip] = useState(() => {
     try {
@@ -193,11 +192,13 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
       const key = fileKey(file);
       if (have.has(key)) continue;
       have.add(key);
-      next.push({ file, key, tier: event.defaultTier, dup: known.has(`${file.name}:${file.size}`) });
+      next.push({ file, key, tier: event.defaultTier, girlsOnly: false, dup: known.has(`${file.name}:${file.size}`) });
     }
     setPicked(next);
   };
-  const setTier = (key: string, tier: Tier) => setPicked((p) => p.map((x) => (x.key === key ? { ...x, tier } : x)));
+  const set = (key: string, change: Partial<Picked>) => setPicked((p) => p.map((x) => (x.key === key ? { ...x, ...change } : x)));
+  // Everything in a core-only event is core (the server enforces it too), so there is no per-file choice.
+  const coreEvent = event.defaultTier === 'core';
   const remove = (key: string) => setPicked((p) => p.filter((x) => x.key !== key));
   const videos = picked.filter((p) => isVideo(p.file)).length;
   const bytes = picked.reduce((s, p) => s + p.file.size, 0);
@@ -242,14 +243,23 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
               <span className="t-h3 tnum">{t('upload.fileCount', { n: picked.length })}</span>
               <span className="t-sm muted tnum">{t('upload.fileSummary', { photos: picked.length - videos, videos, size: fmtBytes(bytes) })}</span>
               <span className="grow" />
-              <span className="t-sm muted">{t('upload.setAll')}</span>
-              <button className="chip" onClick={() => setPicked((p) => p.map((x) => ({ ...x, tier: 'member' })))}>
-                {t('upload.members')}
-              </button>
-              <button className="chip" onClick={() => setPicked((p) => p.map((x) => ({ ...x, tier: 'core' })))}>
-                <Icon name="shield" size="sm" />
-                {t('upload.core')}
-              </button>
+              {coreEvent ? (
+                <span className="tier">
+                  <Icon name="shield" />
+                  {t('upload.allCore')}
+                </span>
+              ) : (
+                <>
+                  <span className="t-sm muted">{t('upload.setAll')}</span>
+                  <button className="chip" onClick={() => setPicked((p) => p.map((x) => ({ ...x, tier: 'member' })))}>
+                    {t('upload.members')}
+                  </button>
+                  <button className="chip" onClick={() => setPicked((p) => p.map((x) => ({ ...x, tier: 'core' })))}>
+                    <Icon name="shield" size="sm" />
+                    {t('upload.core')}
+                  </button>
+                </>
+              )}
             </div>
             <ul className="filelist">
               {picked.slice(0, SHOW).map((p) => (
@@ -270,7 +280,13 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
                       </button>
                     </>
                   )}
-                  <TierChoice value={p.tier} onChange={(v) => setTier(p.key, v)} label={t('upload.whoCanSee', { name: p.file.name })} />
+                  <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
+                    <input type="checkbox" className="check" checked={p.girlsOnly} aria-describedby="girls-help" aria-label={t('upload.girlsOnlyFor', { name: p.file.name })} onChange={(e) => set(p.key, { girlsOnly: e.target.checked })} />
+                    <span className="t-sm" aria-hidden="true">
+                      {t('upload.girlsOnly')}
+                    </span>
+                  </label>
+                  {!coreEvent && <TierChoice value={p.tier} onChange={(v) => set(p.key, { tier: v })} label={t('upload.whoCanSee', { name: p.file.name })} />}
                   <button className="btn btn-g btn-sm btn-ic" aria-label={t('upload.remove', { name: p.file.name })} onClick={() => remove(p.key)}>
                     <Icon name="close" />
                   </button>
@@ -278,17 +294,11 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
               ))}
             </ul>
             {picked.length > SHOW && <span className="t-sm subtle">{t('upload.andMore', { n: picked.length - SHOW })}</span>}
-          </>
-        )}
-        <label className="row" style={{ gap: 12, cursor: 'pointer' }}>
-          <input type="checkbox" className="check" checked={girlsOnly} aria-describedby="girls-help" onChange={(e) => setGirlsOnly(e.target.checked)} />
-          <span className="stack" style={{ gap: 2 }}>
-            <span className="t-sm">{t('upload.girlsOnly')}</span>
             <span className="help" id="girls-help">
               {t('upload.girlsOnlyHelp')}
             </span>
-          </span>
-        </label>
+          </>
+        )}
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button className="btn btn-g" onClick={onBack}>
             {t('upload.back')}
@@ -297,7 +307,7 @@ function AddFiles({ event, onBack, onStart }: { event: { id: string; title: stri
             className="btn btn-p"
             disabled={!picked.length}
             onClick={() => {
-              uploader.add(picked.map(({ file, tier }) => ({ file, tier })), event.id, girlsOnly);
+              uploader.add(picked.map(({ file, tier, girlsOnly }) => ({ file, tier: coreEvent ? 'core' : tier, girlsOnly })), event.id);
               onStart();
             }}
           >

@@ -65,7 +65,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
       const meta = UploadMetadata.safeParse(upload.metadata ?? {});
       if (!uploaderId || !meta.success) throw tusError(400, 'bad_request', 'Upload metadata is missing or invalid.');
       if (upload.size === undefined) throw tusError(400, 'bad_request', 'The upload length must be known.');
-      const [ev] = await db.select({ id: events.id }).from(events).where(and(eq(events.id, meta.data.eventId), isNull(events.deletedAt)));
+      const [ev] = await db.select({ id: events.id, defaultTier: events.defaultTier }).from(events).where(and(eq(events.id, meta.data.eventId), isNull(events.deletedAt)));
       if (!ev) throw tusError(404, 'not_found', 'Not found.');
       const [ticket] = meta.data.ticketId
         ? await db
@@ -80,7 +80,7 @@ export function uploadRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: S
         id: newId(),
         eventId: ev.id,
         kind: meta.data.filetype?.startsWith('video/') ? 'video' : 'image',
-        tier: meta.data.tier,
+        tier: ev.defaultTier === 'core' ? 'core' : meta.data.tier, // everything in a core-only event is core
         girlsOnly: meta.data.girlsOnly,
         status: 'uploading',
         originalFilename: meta.data.filename,

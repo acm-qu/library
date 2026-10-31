@@ -2,7 +2,7 @@ import { assets, type Db, events, jobs } from '@acm/core/db';
 import { eventSearchQuery } from '@acm/core/db';
 import { newId } from '@acm/core/ids';
 import { CreateEventBody, type EventDetail, EventListQuery, Id, PatchEventBody, type Viewer } from '@acm/core/schemas';
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { readerOf, requireAdmin, requireCore, viewerOf } from '../auth/plugin.ts';
@@ -34,7 +34,7 @@ type Row = {
 };
 
 /**
- * Events with per-viewer counts and cover. Members only see events that contain something they can see;
+ * Events with per-viewer counts and cover. Members only see public events that contain something they can see;
  * core members see every event, including empty ones they may upload to, except one holding only girls-only
  * items they may not see.
  */
@@ -42,7 +42,7 @@ async function queryEvents(db: Db, v: Viewer, where: SQL[], limit: number): Prom
   const vis = browsable(v);
   const visible = sql`(c.photo_count + c.video_count) > 0`;
   const hiddenGirls = sql`exists (select 1 from ${assets} where ${assets.eventId} = events.id and ${assets.deletedAt} is null and ${assets.girlsOnly})`;
-  const memberFilter = v.role !== 'core' ? visible : seesGirlsOnly(v) ? sql`true` : sql`(${visible} or not ${hiddenGirls})`;
+  const memberFilter = v.role !== 'core' ? sql`(${visible} and events.default_tier = 'member')` : seesGirlsOnly(v) ? sql`true` : sql`(${visible} or not ${hiddenGirls})`;
   const res = await db.execute<Row>(sql`
     select events.id, events.slug, events.title, events.starts_on::text as starts_on, events.ends_on::text as ends_on, events.location, events.description,
            events.default_tier, events.cover_asset_id, c.photo_count, c.video_count, c.core_count, cov.id as cover_id, cov.rendition_rev as cover_rev
@@ -165,7 +165,17 @@ export function eventRoutes(app: FastifyInstance, { db }: { db: Db }) {
     }
     await db.transaction(async (tx) => {
       await tx.update(events).set({ ...body, updatedAt: new Date() }).where(eq(events.id, id));
-      await audit(tx, v.id, 'event.update', { type: 'event', id }, body);
+      // Everything in a core-only event is core: saving it as core raises any public items, each re-sealed by a job.
+      const raised =
+        body.defaultTier === 'core'
+          ? await tx
+              .update(assets)
+              .set({ tier: 'core', updatedAt: new Date() })
+              .where(and(eq(assets.eventId, id), eq(assets.tier, 'member'), isNull(assets.deletedAt), ne(assets.status, 'deleting')))
+              .returning({ id: assets.id, kind: assets.kind, status: assets.status })
+          : [];
+      if (raised.length) await tx.insert(jobs).values(raised.map((a) => ({ id: newId(), assetId: a.id, kind: a.kind === 'video' && a.status === 'ready' ? ('reprocess' as const) : ('retier' as const), priority: 100 })));
+      await audit(tx, v.id, 'event.update', { type: 'event', id }, raised.length ? { ...body, raised: raised.length } : body);
     });
     return findVisibleEvent(db, v, id);
   });

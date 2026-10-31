@@ -178,10 +178,10 @@ function pump() {
 }
 
 export const uploader = {
-  add(files: { file: File; tier: Tier }[], eventId: string, girlsOnly = false) {
+  add(files: { file: File; tier: Tier; girlsOnly: boolean }[], eventId: string) {
     const known = new Set(items.filter((i) => i.status !== 'cancelled' && i.status !== 'done').map((i) => i.key));
     const fresh: string[] = [];
-    for (const { file, tier } of files) {
+    for (const { file, tier, girlsOnly } of files) {
       const key = fileKey(file);
       if (known.has(key)) continue;
       items.push({ key, file, eventId, tier, girlsOnly, status: 'queued', sent: 0, total: file.size, drops: 0 });

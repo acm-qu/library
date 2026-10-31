@@ -95,6 +95,29 @@ describe('signed-out visitors', () => {
     expect((await anon(`/api/media/${hidden}/thumb`)).statusCode).toBe(404);
     expect((await get(`/api/assets/${pub}`, member)).json().uploader).toMatchObject({ id: coreId });
   });
+
+  it('never see a core-only event or the public items still inside it; saving it as core raises them', async () => {
+    const ev = await addEvent('Retreat', '2026-10-17');
+    await db.update(events).set({ defaultTier: 'core' }).where(eq(events.id, ev));
+    const pub = await addAsset(ev);
+    const vid = await addAsset(ev, { kind: 'video' });
+    const anon = (url: string) => t.app.inject({ method: 'GET', url });
+
+    expect((await anon('/api/events')).json().items).toEqual([]);
+    expect((await anon(`/api/events/${ev}`)).statusCode).toBe(404);
+    expect((await anon(`/api/assets/${pub}`)).statusCode).toBe(404);
+    expect((await anon(`/api/media/${pub}/thumb`)).statusCode).toBe(404);
+    expect((await get(`/api/assets/${pub}`, core)).statusCode).toBe(200);
+
+    expect((await send('PATCH', `/api/events/${ev}`, core, { defaultTier: 'core' })).statusCode).toBe(200);
+    expect((await db.select().from(assets)).map((a) => a.tier)).toEqual(['core', 'core']);
+    const queued = await db.select().from(jobs);
+    expect(queued.map((j) => [j.assetId, j.kind]).sort()).toEqual([[pub, 'retier'], [vid, 'reprocess']].sort());
+    // and an item can't be made public, or moved in as public
+    const mine = await addAsset(await addEvent('Open', '2026-10-18'));
+    expect((await send('PATCH', `/api/assets/${mine}`, core, { tier: 'member', eventId: ev })).statusCode).toBe(200);
+    expect((await db.select().from(assets).where(eq(assets.id, mine)))[0]?.tier).toBe('core');
+  });
 });
 
 describe('girls only', () => {

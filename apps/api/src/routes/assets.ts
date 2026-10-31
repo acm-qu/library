@@ -21,11 +21,14 @@ const SORT_TIME = sql`coalesce(${assets.capturedAt}, ${assets.createdAt})`;
 export async function loadAsset(db: Db, v: Viewer, id: string, min: 'status' | 'download' | 'full') {
   if (!Id.safeParse(id).success) throw notFound();
   const [row] = await db
-    .select({ asset: assets, eventDeleted: sql<boolean>`${events.deletedAt} is not null` })
+    .select({ asset: assets, eventDeleted: sql<boolean>`${events.deletedAt} is not null`, eventCore: sql<boolean>`${events.defaultTier} = 'core'` })
     .from(assets)
     .innerJoin(events, eq(events.id, assets.eventId))
     .where(eq(assets.id, id));
-  if (!row || !atLeast(access(v, row.asset, row.eventDeleted), min)) throw notFound();
+  if (!row) throw notFound();
+  // A core-only event's items count as core even before a save raises them (rows from before the rule).
+  const asIf = row.eventCore ? { ...row.asset, tier: 'core' as const } : row.asset;
+  if (!atLeast(access(v, asIf, row.eventDeleted), min)) throw notFound();
   return row.asset;
 }
 
@@ -98,10 +101,9 @@ export function assetRoutes(app: FastifyInstance, { db }: { db: Db }) {
     const body = PatchAssetBody.parse(req.body);
     const a = await loadAsset(db, v, id, 'status');
     if (!canEditAsset(v, a)) throw notFound();
-    if (body.eventId && body.eventId !== a.eventId) {
-      const [target] = await db.select({ id: events.id }).from(events).where(and(eq(events.id, body.eventId), isNull(events.deletedAt)));
-      if (!target) throw new HttpError('bad_request', { fields: { eventId: 'no_such_event' } });
-    }
+    const [target] = await db.select({ defaultTier: events.defaultTier }).from(events).where(and(eq(events.id, body.eventId ?? a.eventId), isNull(events.deletedAt)));
+    if (!target) throw new HttpError('bad_request', { fields: { eventId: 'no_such_event' } });
+    if (target.defaultTier === 'core') body.tier = 'core'; // everything in a core-only event is core
     await db.transaction(async (tx) => {
       // Access follows the tier column at once; a job then re-seals (or unseals) the stored bytes to match.
       await tx.update(assets).set({ ...body, updatedAt: new Date() }).where(eq(assets.id, a.id));

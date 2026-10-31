@@ -202,6 +202,12 @@ describe.runIf(hasFfmpeg)('tus uploads', () => {
     expect((await create(10, { eventId, tier: 'core', girlsOnly: 'true', filename: 'g.jpg' })).statusCode).toBe(201);
     expect((await db.select().from(assets).where(eq(assets.originalFilename, 'g.jpg')))[0]).toMatchObject({ tier: 'core', girlsOnly: true });
   });
+
+  it('makes every upload to a core-only event core', async () => {
+    await db.update(events).set({ defaultTier: 'core' }).where(eq(events.id, eventId));
+    expect((await create(10, { eventId, tier: 'member', filename: 'pub.jpg' })).statusCode).toBe(201);
+    expect((await db.select().from(assets).where(eq(assets.originalFilename, 'pub.jpg')))[0]).toMatchObject({ tier: 'core' });
+  });
 });
 
 describe.runIf(hasFfmpeg)('my uploads and retry', () => {
