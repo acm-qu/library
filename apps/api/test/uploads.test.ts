@@ -360,12 +360,19 @@ describe('upload queue', () => {
     const myLoc = mine.headers.location as string;
     const chunk = { ...tusHeaders(), 'upload-ticket': ticketOf.get(myLoc) ?? '', 'upload-offset': '0', 'content-type': 'application/offset+octet-stream' };
 
-    await http('PATCH', `${myLoc}?x=/${theirId}`, chunk, Buffer.alloc(10, 1));
-    expect.soft(await offset(), 'via my upload URL').toBe('0');
+    expect((await http('PATCH', `${myLoc}?x=/${theirId}`, chunk, Buffer.alloc(10, 1))).statusCode).toBe(404);
+    expect((await http('PATCH', `/api/uploads?x=/${theirId}`, chunk, Buffer.alloc(10, 1))).statusCode).toBe(404);
+    expect(await offset()).toBe('0');
+  });
 
-    const before = await offset();
-    await http('PATCH', `/api/uploads?x=/${theirId}`, { ...chunk, 'upload-offset': before ?? '0' }, Buffer.alloc(10, 1));
-    expect.soft(await offset(), 'via the bare upload URL').toBe(before);
+  it('only creates uploads on the bare tus path', async () => {
+    const headers = { ...tusHeaders(), 'upload-offset': '0', 'content-type': 'application/offset+octet-stream' };
+    for (const method of ['HEAD', 'PATCH', 'DELETE']) {
+      for (const url of ['/api/uploads', '/api/uploads/']) {
+        const res = await http(method, url, headers, method === 'PATCH' ? Buffer.alloc(10, 1) : undefined);
+        expect(res.statusCode, `${method} ${url}`).toBe(404);
+      }
+    }
   });
 });
 
