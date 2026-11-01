@@ -348,6 +348,25 @@ describe('upload queue', () => {
     expect((await cancel(mine.id, core.sid)).statusCode).toBe(200);
     expect((await cancel(mine.id, core.sid)).statusCode).toBe(404);
   });
+
+  it("won't let a query string aim a request at someone else's upload", async () => {
+    const theirs = await create(100, { eventId, tier: 'member', filename: 'noor.jpg' }, other.sid);
+    const theirLoc = theirs.headers.location as string;
+    const theirId = theirLoc.split('/').pop()!;
+    const offset = async () => (await http('HEAD', theirLoc, tusHeaders(other.sid))).headers['upload-offset'];
+    expect(await offset()).toBe('0');
+
+    const mine = await create(100, { eventId, tier: 'member', filename: 'me.jpg' });
+    const myLoc = mine.headers.location as string;
+    const chunk = { ...tusHeaders(), 'upload-ticket': ticketOf.get(myLoc) ?? '', 'upload-offset': '0', 'content-type': 'application/offset+octet-stream' };
+
+    await http('PATCH', `${myLoc}?x=/${theirId}`, chunk, Buffer.alloc(10, 1));
+    expect.soft(await offset(), 'via my upload URL').toBe('0');
+
+    const before = await offset();
+    await http('PATCH', `/api/uploads?x=/${theirId}`, { ...chunk, 'upload-offset': before ?? '0' }, Buffer.alloc(10, 1));
+    expect.soft(await offset(), 'via the bare upload URL').toBe(before);
+  });
 });
 
 describe.runIf(hasFfmpeg)('upload queue and finished uploads', () => {
