@@ -133,7 +133,7 @@ export function mediaRoutes(app: FastifyInstance, { db, cfg }: { db: Db; cfg: Se
 
   app.get('/api/media/:id/:what', async (req, reply) => {
     const { id, what } = params.parse(req.params);
-    const spec = KINDS[what];
+    const spec = Object.hasOwn(KINDS, what) ? KINDS[what] : undefined;
     if (!spec) throw notFound();
     const a = await loadAsset(db, readerOf(req), id, spec.min);
     const [r] = await db
