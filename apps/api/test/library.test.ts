@@ -249,6 +249,15 @@ describe('asset detail and edits', () => {
     expect((await get(`/api/assets/${keepOnly}`, member)).json()).toMatchObject({ viewUrl: null, originalUrl: `/api/media/${keepOnly}/original` });
   });
 
+  it('404s media names that are not rendition kinds, such as __proto__', async () => {
+    const ev = await addEvent('E', '2026-10-10');
+    const hidden = await addAsset(ev, { tier: 'core' });
+    for (const what of ['__proto__', 'constructor', 'toString']) {
+      const res = await get(`/api/media/${hidden}/${what}`, member);
+      expect(res.statusCode, what).toBe(404);
+    }
+  });
+
   it('lets an uploader change tier and move their own item; others get 404', async () => {
     const ev = await addEvent('E', '2026-10-10');
     const other = await addEvent('F', '2026-10-11');

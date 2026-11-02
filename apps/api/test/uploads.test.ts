@@ -348,6 +348,32 @@ describe('upload queue', () => {
     expect((await cancel(mine.id, core.sid)).statusCode).toBe(200);
     expect((await cancel(mine.id, core.sid)).statusCode).toBe(404);
   });
+
+  it("won't let a query string aim a request at someone else's upload", async () => {
+    const theirs = await create(100, { eventId, tier: 'member', filename: 'noor.jpg' }, other.sid);
+    const theirLoc = theirs.headers.location as string;
+    const theirId = theirLoc.split('/').pop()!;
+    const offset = async () => (await http('HEAD', theirLoc, tusHeaders(other.sid))).headers['upload-offset'];
+    expect(await offset()).toBe('0');
+
+    const mine = await create(100, { eventId, tier: 'member', filename: 'me.jpg' });
+    const myLoc = mine.headers.location as string;
+    const chunk = { ...tusHeaders(), 'upload-ticket': ticketOf.get(myLoc) ?? '', 'upload-offset': '0', 'content-type': 'application/offset+octet-stream' };
+
+    expect((await http('PATCH', `${myLoc}?x=/${theirId}`, chunk, Buffer.alloc(10, 1))).statusCode).toBe(404);
+    expect((await http('PATCH', `/api/uploads?x=/${theirId}`, chunk, Buffer.alloc(10, 1))).statusCode).toBe(404);
+    expect(await offset()).toBe('0');
+  });
+
+  it('only creates uploads on the bare tus path', async () => {
+    const headers = { ...tusHeaders(), 'upload-offset': '0', 'content-type': 'application/offset+octet-stream' };
+    for (const method of ['HEAD', 'PATCH', 'DELETE']) {
+      for (const url of ['/api/uploads', '/api/uploads/']) {
+        const res = await http(method, url, headers, method === 'PATCH' ? Buffer.alloc(10, 1) : undefined);
+        expect(res.statusCode, `${method} ${url}`).toBe(404);
+      }
+    }
+  });
 });
 
 describe.runIf(hasFfmpeg)('upload queue and finished uploads', () => {
